@@ -39,6 +39,8 @@ def main(argv=None):
         hub = hubs.Hub(config, sources.build(config, clients))
     if args.command == "snapshot":
         for source in hub.sources:
+            if source.name == "t3":
+                source.deadline = None   # one snapshot waits for every server
             hub.run_once(source)
         json.dump(hub.current, sys.stdout, indent=2)
         print()

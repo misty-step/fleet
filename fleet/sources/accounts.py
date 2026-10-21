@@ -3,6 +3,8 @@ import json
 import urllib.error
 import urllib.request
 
+from ..hub import SourceError
+
 
 class Accounts:
     name = "accounts"
@@ -18,13 +20,13 @@ class Accounts:
             with urllib.request.urlopen(self.url, timeout=20) as response:
                 status = json.load(response)
         except (urllib.error.URLError, OSError, ValueError):
-            raise RuntimeError("accounts-unavailable") from None
+            raise SourceError("accounts-unavailable") from None
         if not isinstance(status, dict) or not isinstance(status.get("accounts"), list):
-            raise ValueError("accounts-invalid-status")
+            raise SourceError("accounts-invalid-status")
         accounts = []
         for account in status["accounts"]:
             if not isinstance(account, dict):
-                raise ValueError("accounts-invalid-account")
+                raise SourceError("accounts-invalid-account")
             # Only retain inputs used by the snapshot, never sign-in or personal details.
             item = {key: account.get(key) for key in (
                 "instance_id", "name", "provider", "state", "room_percent", "resets_at",

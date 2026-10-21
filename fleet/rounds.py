@@ -17,7 +17,7 @@ EVENT = re.compile(r"^<!-- ship-loop:event v1 -->\n```json\n([\s\S]*)\n```\s*$")
 LEDGER_SECONDS = 60
 AUTH_SECONDS = 600
 
-QUALIFIED = re.compile(r"(?<![\w.-])(?:[\w.-]+/)?([A-Za-z0-9][\w.-]*)#(\d+)(?!\d)")
+QUALIFIED = re.compile(r"(?<![\w.-])(?:([\w.-]+)/)?([A-Za-z0-9][\w.-]*)#(\d+)(?!\d)")
 BARE = re.compile(r"(?<![\w#])#(\d+)(?!\d)|(?<![a-z0-9])pr[-#]?(\d+)(?!\d)", re.IGNORECASE)
 MARKERS = re.compile(r"(?<![a-z0-9])(?:(?:round|fix|recheck)[\s_-]*(\d{1,2})|r(\d))(?![0-9a-z])", re.IGNORECASE)   # "r" takes one digit: "R75" is a name
 REVIEW_ROLE = re.compile(r"(?<![a-z0-9])(?:qa|review\w*|judge)(?![a-z0-9])", re.IGNORECASE)
@@ -178,11 +178,13 @@ def from_threads(threads):
 
 
 def named(text, tree, everywhere):
-    """PR keys a title or ID names: "repo#N" anywhere in the fleet, "#N" or "prN" within its lane."""
+    """PR keys a title or ID names: "owner/repo#N" or "repo#N" anywhere in the fleet, "#N" or "prN" within its lane."""
     names = set()
-    for repo, number in QUALIFIED.findall(text):
+    for owner, repo, number in QUALIFIED.findall(text):
+        want = ("%s/%s" % (owner, repo) if owner else repo).lower()
         names.update(name for name, pr in everywhere.items()
-                     if str(pr["number"]) == number and pr["repository"].lower().rsplit("/", 1)[-1] == repo.lower())
+                     if str(pr["number"]) == number
+                     and (pr["repository"].lower() if owner else pr["repository"].lower().rsplit("/", 1)[-1]) == want)
     for hash_number, pr_number in BARE.findall(text):
         number = hash_number or pr_number
         names.update(name for name, pr in tree.items() if str(pr["number"]) == number)

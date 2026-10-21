@@ -206,6 +206,18 @@ class LoopRuleTest(unittest.TestCase):
         self.assertEqual(self.loop("Recheck shop#338 round 5", state="merged"), [])
         self.assertEqual(self.loop("Builder for shop#338"), [])
 
+    def test_owner_qualified_name_matches_only_that_owner(self):
+        twin = dict(PR, repository="other/shop", url="https://github.com/other/shop/pull/338")
+        threads = [thread("lane", "Shop lane", prs=[PR]), thread("twin", "Twin lane", prs=[twin]),
+                   thread("c", "QA example/shop#338 round 3", parent="lane", created="2026-10-21T21:30:00Z")]
+        lanes = [lane(prs=[PR]), lane("twin", prs=[twin])]
+        ctx = context(threads)
+        rounds.apply(lanes, ctx)
+        self.assertNotIn("other/shop#338", rounds.from_threads(threads))
+        self.assertIsNone(lanes[1]["prs"][0]["round"])
+        alerts = rounds.attention(lanes, ctx)
+        self.assertEqual([(a["threadId"], a["prUrl"]) for a in alerts], [("lane", PR["url"])])
+
     def test_threshold_is_configuration(self):
         self.assertEqual(len(self.loop("Recheck shop#338 round 2", loop_round=1)), 1)
 

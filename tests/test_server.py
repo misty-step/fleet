@@ -69,6 +69,37 @@ class ServerTest(unittest.TestCase):
         status, body = self.app.post("/fleet/api/actions/settle", {"server": "a", "threadId": "t"}, {"X-Fleet-Action": "1"})
         self.assertEqual((status, body["error"]), (501, "unknown-action"))
 
+    def test_refusals_after_unread_bodies_keep_the_connection_usable(self):
+        import http.client
+        port = self.app.httpd.server_address[1]
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        payload = json.dumps({"server": "a", "threadId": "t"})
+        connection.request("POST", "/fleet/api/actions/settle", body=payload, headers={"Content-Type": "application/json"})
+        self.assertEqual(connection.getresponse().read() and 403, 403)
+        connection.request("GET", "/fleet/api/snapshot")
+        response = connection.getresponse()
+        self.assertEqual((response.status, json.loads(response.read())), (200, FIXTURE))
+        connection.close()
+
+    def test_cross_origin_is_refused(self):
+        headers = {"X-Fleet-Action": "1", "Origin": "https://elsewhere.example"}
+        status, body = self.app.post("/fleet/api/actions/settle", {"server": "a", "threadId": "t"}, headers)
+        self.assertEqual((status, body["error"]), (403, "cross-origin"))
+
+    def test_same_origin_through_a_proxy_is_allowed(self):
+        app = Running(hub.FixedHub(FIXTURE), actions={"settle": lambda s, t: {"ok": True, "error": None}})
+        headers = {"X-Fleet-Action": "1", "Origin": "https://fleet.example", "X-Forwarded-Host": "fleet.example"}
+        try:
+            status, _ = app.post("/fleet/api/actions/settle", {"server": "a", "threadId": "t"}, headers)
+        finally:
+            app.httpd.shutdown()
+        self.assertEqual(status, 200)
+
+    def test_refusal_and_failure_status_codes(self):
+        self.assertEqual(server.action_status({"ok": False, "error": "not-tidy"}), 409)
+        self.assertEqual(server.action_status({"ok": False, "error": "tool-error"}), 502)
+        self.assertEqual(server.action_status({"ok": True, "error": None}), 200)
+
     def test_action_is_called(self):
         calls = []
         app = Running(hub.FixedHub(FIXTURE), actions={"settle": lambda s, t: calls.append((s, t)) or {"ok": True, "error": None}})

@@ -44,7 +44,7 @@ def main(argv=None):
         print()
         return 0
     from . import actions
-    server.serve(hub, args.bind or config.bind, args.port or config.port, config.base_path, actions.build(config, clients))
+    server.serve(hub, args.bind or config.bind, args.port or config.port, config.base_path, actions.build(config, clients, hub))
     return 0
 
 

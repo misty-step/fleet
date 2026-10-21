@@ -15,13 +15,16 @@ class Clients:
     def ids(self):
         return list(self.servers)
 
-    def call(self, server_id, tool, arguments):
-        """Call one tool on one server. Reopens the session once if it fails; raises McpError."""
+    def call(self, server_id, tool, arguments, retry=True):
+        """Call one tool on one server. Reopens the session once if it fails; raises McpError.
+
+        Pass retry=False for a call that must not repeat, such as a send whose response may be lost.
+        """
         server = self.servers.get(server_id)
         if server is None:
             raise McpError("unknown-server")
         with self.locks[server_id]:
-            for attempt in (1, 2):
+            for attempt in (1, 2) if retry else (2,):
                 try:
                     session = self.sessions.get(server_id)
                     if session is None:

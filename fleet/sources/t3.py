@@ -9,16 +9,22 @@ A normalized thread is:
 `pendingQuestions` is null when a waiting thread's questions could not be read.
 
 Each server is collected on its own; one failing marks only that server and keeps
-its last good threads.
+its last good threads. Each server has at most one request in flight, and a
+collection waits for it only until a deadline; the request carries on into later
+collections. Meanwhile the server shows its last result, or "slow" with its last
+good threads once the request has run past SLOW_SECONDS or if it never finished.
 """
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, wait
 from datetime import datetime, timezone
 
 from ..hub import describe, iso
 
 PAGE = 100
 MAX_PAGES = 200
+MARGIN_SECONDS = 3
+SLOW_SECONDS = 30
 
 
 def utc_now():
@@ -40,14 +46,47 @@ class T3:
         self.interval = config.interval_seconds
         self.clients = clients
         self.clock = clock
+        self.deadline = config.interval_seconds + MARGIN_SECONDS   # None waits for every server
+        self.slow_after = SLOW_SECONDS
         self.last = {}           # server id -> {"lastSeenAt", "threads"} from its last good collection
+        self.running = {}        # server id -> (monotonic start, Future) of its request in flight
+        self.finished = {}       # server id -> (entry, threads) of its last finished request
 
     def collect(self, hub):
         ids = self.clients.ids()
-        with ThreadPoolExecutor(max_workers=max(1, len(ids))) as pool:
-            entries = list(pool.map(self.server, ids))
+        for server_id in ids:
+            self.harvest(server_id)
+            if server_id not in self.running:
+                self.running[server_id] = (time.monotonic(), self.start(server_id))
+        wait([self.running[server_id][1] for server_id in ids], timeout=self.deadline)
+        entries = [self.entry(server_id) for server_id in ids]
         return {"servers": [entry for entry, _ in entries],
                 "threads": [thread for _, threads in entries for thread in threads]}
+
+    def harvest(self, server_id):
+        """Move a finished request's result out of flight."""
+        if server_id in self.running and self.running[server_id][1].done():
+            self.finished[server_id] = self.running.pop(server_id)[1].result()
+
+    def entry(self, server_id):
+        self.harvest(server_id)
+        if server_id in self.running:
+            began, _ = self.running[server_id]
+            if server_id not in self.finished or time.monotonic() - began > self.slow_after:
+                return self.failed(server_id, "slow")
+        return self.finished[server_id]
+
+    def start(self, server_id):
+        """Collect one server on a daemon thread, so a hung server never holds up exit."""
+        future = Future()
+        threading.Thread(target=lambda: future.set_result(self.server(server_id)),
+                         name="t3-" + server_id, daemon=True).start()
+        return future
+
+    def failed(self, server_id, error):
+        last = self.last.get(server_id, {"lastSeenAt": None, "threads": []})
+        return ({"id": server_id, "ok": False, "error": error, "lastSeenAt": last["lastSeenAt"],
+                 "latencyMs": None, "threads": len(last["threads"])}, last["threads"])
 
     def server(self, server_id):
         """(snapshot server entry, threads) for one server; never raises."""
@@ -55,9 +94,7 @@ class T3:
         try:
             threads = self.threads(server_id)
         except Exception as error:  # one server failing must not affect the others
-            last = self.last.get(server_id, {"lastSeenAt": None, "threads": []})
-            return ({"id": server_id, "ok": False, "error": describe(error), "lastSeenAt": last["lastSeenAt"],
-                     "latencyMs": None, "threads": len(last["threads"])}, last["threads"])
+            return self.failed(server_id, describe(error))
         seen = iso(self.clock())
         self.last[server_id] = {"lastSeenAt": seen, "threads": threads}
         return ({"id": server_id, "ok": True, "error": None, "lastSeenAt": seen,

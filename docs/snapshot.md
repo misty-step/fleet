@@ -25,7 +25,7 @@ Times are ISO 8601 UTC strings. Missing values are `null`, never omitted.
   "servers": [{
     "id": "mirrodin",
     "ok": true,
-    "error": null,                     // short error code when ok is false
+    "error": null,                     // short error code when ok is false; "slow" while a request runs long
     "lastSeenAt": "…",                 // last successful collection
     "latencyMs": 880,
     "threads": 120                     // unsettled threads seen, children included

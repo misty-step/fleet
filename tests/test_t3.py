@@ -1,7 +1,9 @@
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from fleet import config, derive, snapshot
+from fleet import config, derive, hub, snapshot
 from fleet.mcp import McpError
 from fleet.sources.t3 import T3
 
@@ -28,6 +30,7 @@ class FakeClients:
         self.servers = servers            # id -> {project: [raw threads]}
         self.pending = pending or {}      # threadId -> request IDs
         self.failing = set(failing)
+        self.hanging = {}                 # server id -> Event its calls block on until set
         self.calls = []
 
     def ids(self):
@@ -35,6 +38,8 @@ class FakeClients:
 
     def call(self, server_id, tool, arguments):
         self.calls.append((server_id, tool, arguments))
+        if server_id in self.hanging:
+            self.hanging[server_id].wait()
         if server_id in self.failing:
             raise McpError("unreachable:URLError")
         projects = self.servers[server_id]
@@ -108,6 +113,38 @@ class SourceTest(unittest.TestCase):
         self.assertEqual(beta, {"id": "beta", "ok": False, "error": "unreachable:URLError",
                                 "lastSeenAt": "2026-10-21T23:00:00Z", "latencyMs": None, "threads": 2})
         self.assertEqual(sorted(t["threadId"] for t in partial["threads"]), ["a1", "a2", "b1", "b2"])
+
+    def test_hung_server_does_not_hold_back_the_others(self):
+        clients = FakeClients({"alpha": {"p": [raw_thread("a1")]}, "beta": {"p": [raw_thread("b1")]}})
+        source = T3(config.parse({}), clients, clock=lambda: NOW)
+        source.deadline = 0.2
+        the_hub = hub.Hub(config.parse({}), [source], clock=lambda: NOW)
+        the_hub.run_once(source)
+        release = clients.hanging["beta"] = threading.Event()
+        clients.servers["alpha"]["p"].append(raw_thread("a2"))
+        try:
+            for slow_after, beta_ok in ((60, True), (0, False), (0, False)):
+                source.slow_after = slow_after
+                began = time.monotonic()
+                the_hub.run_once(source)
+                self.assertLess(time.monotonic() - began, 2)
+                published = the_hub.current
+                alpha, beta = published["servers"]
+                self.assertEqual((alpha["ok"], alpha["threads"]), (True, 2))
+                self.assertEqual((beta["ok"], beta["lastSeenAt"], beta["threads"]), (beta_ok, "2026-10-21T23:00:00Z", 1))
+                if not beta_ok:
+                    self.assertEqual((beta["error"], beta["latencyMs"]), ("slow", None))
+                self.assertEqual(sorted(lane["threadId"] for lane in published["lanes"]), ["a1", "a2", "b1"])
+            # one request in flight per server: the hung one is never started twice
+            self.assertEqual(sum(1 for call in clients.calls if call[:2] == ("beta", "t3_project_list")), 2)
+        finally:
+            release.set()
+        del clients.hanging["beta"]
+        clients.servers["beta"]["p"].append(raw_thread("b2"))
+        source.deadline = 2
+        source.collect(None)
+        partial = source.collect(None)
+        self.assertEqual((partial["servers"][1]["ok"], partial["servers"][1]["threads"]), (True, 2))
 
     def test_server_never_reached(self):
         partial = collect(FakeClients({"alpha": {}}, failing={"alpha"}))

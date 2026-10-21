@@ -11,7 +11,7 @@ Times are ISO 8601 UTC strings. Missing values are `null`, never omitted.
 {
   "schemaVersion": 1,
   "generatedAt": "2026-10-21T23:00:00Z",
-  "thresholds": { "quietHours": 2, "waitingMinutes": 15, "tidyMinutes": 30, "staleHours": 24, "loopRound": 2 },
+  "thresholds": { "quietHours": 2, "waitingMinutes": 15, "tidyMinutes": 30, "staleHours": 24, "loopRound": 2 }   // loopRound is a fix round,
 
   "summary": {
     "lanes": 20,          // rows in lanes
@@ -62,7 +62,7 @@ Times are ISO 8601 UTC strings. Missing values are `null`, never omitted.
       "number": 447,
       "url": "https://github.com/misty-step/harness/pull/447",
       "state": "open | merged | closed",
-      "round": 2                       // null when unknown
+      "round": 2                       // review round (1 = first review; fix round = round - 1); null when unknown
     }],
     "account": "claude-mistystep",     // T3 provider instance id
     "model": "claude-opus-5-5",

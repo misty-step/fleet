@@ -101,7 +101,7 @@ function prs(list) {
   if (!list.length) return `<span class="sub">—</span>`;
   return list.map((p) => {
     const round = p.round == null ? "" : ` · r${p.round}`;
-    const tone = p.state === "open" && p.round >= (snapshot.thresholds.loopRound || 2) ? "bad" : p.state === "merged" ? "ok" : "";
+    const tone = p.state === "open" && p.round != null && p.round - 1 >= (snapshot.thresholds.loopRound || 2) ? "bad" : p.state === "merged" ? "ok" : "";
     return `<a class="badge ${tone}" href="${esc(p.url)}" title="${esc(p.repository)} ${esc(p.state)}">#${p.number}${round}</a>`;
   }).join(" ");
 }

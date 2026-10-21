@@ -56,7 +56,7 @@ Thresholds are configuration; these are the defaults.
 
 | Flag | Rule |
 | --- | --- |
-| Loop | A linked open PR is at fix round 2 or later |
+| Loop | A linked open PR is at fix round 2 or later, that is review round 3 or later (ship-loop allows one fix round) |
 | Waiting | Thread status is `waiting` (approval or question) for over 15 min |
 | Failed | Latest run `failed` |
 | Interrupted | Latest run `interrupted` and the thread is not settled |

@@ -10,6 +10,7 @@ Partial: threadId -> {currentStep, lastSideEffect, runStartedAt}.
 import json
 import re
 import shlex
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 from .derive import ACTIVE
@@ -155,26 +156,32 @@ class Activity:
             })
             marker = thread.get("updatedAt"), thread.get("itemCount")
             if state["marker"] != marker:
-                if state["runId"] != thread.get("latestRunId"):
-                    state["data"]["runStartedAt"] = None
-                    state["runId"] = thread.get("latestRunId")
-                for item_id in list(state["pending"]):
-                    page = self.clients.call(key[0], "t3_thread_read", {
-                        "threadId": key[1], "view": "activity", "itemId": item_id,
-                        "limit": 1, "maxCharsPerItem": 2000, "runLimit": 1})
-                    self._consume(state, page, thread)
-                while True:
-                    page = self.clients.call(key[0], "t3_thread_read", {
-                        "threadId": key[1], "view": "activity", "afterPosition": state["cursor"],
-                        "limit": PAGE_SIZE, "maxCharsPerItem": 2000, "runLimit": 1})
-                    self._consume(state, page, thread)
-                    cursor = page.get("nextPosition")
-                    if cursor is None or cursor <= state["cursor"]:
-                        break
-                    state["cursor"] = cursor
-                    if not page.get("hasMore"):
-                        break
-                state["marker"] = marker
+                state = deepcopy(state)
+                try:
+                    if state["runId"] != thread.get("latestRunId"):
+                        state["data"]["runStartedAt"] = None
+                        state["runId"] = thread.get("latestRunId")
+                    for item_id in list(state["pending"]):
+                        page = self.clients.call(key[0], "t3_thread_read", {
+                            "threadId": key[1], "view": "activity", "itemId": item_id,
+                            "limit": 1, "maxCharsPerItem": 2000, "runLimit": 1})
+                        self._consume(state, page, thread)
+                    while True:
+                        page = self.clients.call(key[0], "t3_thread_read", {
+                            "threadId": key[1], "view": "activity", "afterPosition": state["cursor"],
+                            "limit": PAGE_SIZE, "maxCharsPerItem": 2000, "runLimit": 1})
+                        self._consume(state, page, thread)
+                        cursor = page.get("nextPosition")
+                        if cursor is None or cursor <= state["cursor"]:
+                            break
+                        state["cursor"] = cursor
+                        if not page.get("hasMore"):
+                            break
+                    state["marker"] = marker
+                except Exception:
+                    state = self.threads[key]
+                else:
+                    self.threads[key] = state
             result[key[1]] = dict(state["data"])
         return result
 

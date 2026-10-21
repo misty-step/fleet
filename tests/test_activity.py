@@ -170,12 +170,43 @@ class ActivityTest(unittest.TestCase):
         source = activity.Activity(config.Config(), clients)
         current = [thread()]
         hub = SimpleNamespace(partial=lambda _: {"threads": current})
-        with self.assertRaises(RuntimeError):
-            source.collect(hub)
+        self.assertIsNone(source.collect(hub)["lane"]["lastSideEffect"])
+        self.assertIsNone(source.threads[("alpha", "lane")]["marker"])
+        self.assertEqual(source.threads[("alpha", "lane")]["cursor"], 0)
         self.assertEqual(source.collect(hub)["lane"]["lastSideEffect"]["kind"], "push")
         current.clear()
         self.assertEqual(source.collect(hub), {})
         self.assertEqual(source.threads, {})
+
+    def test_healthy_thread_is_read_after_another_thread_fails(self):
+        clients = FakeClients(RuntimeError("synthetic failure"), page([item()]),
+                              page([item("gh pr create")]))
+        source, hub, result = self.collect(clients, [thread("failing"), thread("healthy")])
+        self.assertIsNone(result["failing"]["lastSideEffect"])
+        self.assertEqual(result["healthy"]["lastSideEffect"]["kind"], "push")
+        self.assertEqual([c[2]["threadId"] for c in clients.calls], ["failing", "healthy"])
+        result = source.collect(hub)
+        self.assertEqual(result["failing"]["lastSideEffect"]["kind"], "pr")
+        self.assertEqual(result["healthy"]["lastSideEffect"]["kind"], "push")
+        self.assertEqual([c[2]["threadId"] for c in clients.calls],
+                         ["failing", "healthy", "failing"])
+
+    def test_later_page_failure_preserves_state_for_retry(self):
+        clients = FakeClients(page([item(status="running")]),
+                              page([item()]), page([item("gh pr create", position=2)], more=True),
+                              RuntimeError("synthetic failure"),
+                              page([item()]), page([item("gh pr create", position=2)], more=True),
+                              page([item("fly deploy", position=3)]))
+        current = [thread()]
+        source, hub, first = self.collect(clients, current)
+        before = copy.deepcopy(source.threads[("alpha", "lane")])
+        current[0]["updatedAt"] = "2026-10-21T23:01:00Z"
+        self.assertEqual(source.collect(hub), first)
+        self.assertEqual(source.threads[("alpha", "lane")], before)
+        result = source.collect(hub)
+        self.assertEqual(result["lane"]["lastSideEffect"]["kind"], "deploy")
+        self.assertEqual([c[2].get("afterPosition") for c in clients.calls],
+                         [0, None, 1, 2, None, 1, 2])
 
 
 class QuietTest(unittest.TestCase):

@@ -26,9 +26,9 @@ def build(config, clients, hub):
             if source.name == "t3":
                 threading.Thread(target=hub.run_once, args=(source,), name="refresh-t3", daemon=True).start()
 
-    def call(server_id, tool, arguments):
+    def call(server_id, tool, arguments, retry=True):
         try:
-            clients.call(server_id, tool, arguments)
+            clients.call(server_id, tool, arguments, retry=retry)
         except Exception as error:  # report a short code only, never a header or body
             return {"ok": False, "error": describe(error)}
         refresh()
@@ -44,6 +44,8 @@ def build(config, clients, hub):
             return {"ok": False, "error": "not-tidy"}
         if thread_id not in (hub.partial("roster") or {}).get("wipRoots", []):
             return {"ok": False, "error": "not-roster"}
-        return call(server_id, "t3_thread_send", {"threadId": thread_id, "message": NUDGE_MESSAGE, "mode": "auto"})
+        # One attempt only: the send has no idempotency key, so a replay after a lost response could deliver twice.
+        return call(server_id, "t3_thread_send", {"threadId": thread_id, "message": NUDGE_MESSAGE, "mode": "auto"},
+                    retry=False)
 
     return {"settle": settle, "nudge": nudge}

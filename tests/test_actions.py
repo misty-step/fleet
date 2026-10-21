@@ -1,12 +1,13 @@
 import json
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from fleet import actions, config, hub, server
-from fleet.mcp import McpError
+from fleet import actions, clients as fleet_clients, config, hub, server
+from fleet.mcp import Mcp, McpError
 
 LANE = "mcp:lane-1"
 CHILD = "mcp:child-1"
@@ -36,11 +37,37 @@ class FakeClients:
         self.calls = []
         self.error = error
 
-    def call(self, server_id, tool, arguments):
+    def call(self, server_id, tool, arguments, retry=True):
         self.calls.append((server_id, tool, arguments))
         if self.error:
             raise self.error
         return {}
+
+
+class LosingT3:
+    """A fake MCP server that accepts every tools/call, then times out before the response arrives."""
+
+    def __init__(self):
+        self.sends = []
+
+    def open(self, request, timeout):
+        payload = json.loads(request.data)
+        if payload["method"] == "tools/call":
+            self.sends.append(payload["params"])
+            raise TimeoutError()
+        body = json.dumps({"jsonrpc": "2.0", "id": payload.get("id"), "result": {}}).encode()
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Mcp-Session-Id": "s1"}
+        response.read.return_value = body if "id" in payload else b""
+        return response
+
+
+class Server:
+    id, url = "alpha", "http://t3.invalid/mcp"
+
+    def token(self):
+        return "token"
 
 
 class ActionsTest(unittest.TestCase):
@@ -87,6 +114,20 @@ class ActionsTest(unittest.TestCase):
         for words in ("doing", "blocks", "next step"):
             self.assertIn(words, arguments["message"])
         self.assertTrue(self.t3.collected.wait(5))
+
+    def test_nudge_with_a_lost_response_sends_once(self):
+        t3 = LosingT3()
+        clients = fleet_clients.Clients([Server()], factory=lambda url, token: Mcp(url, token, opener=t3.open))
+        self.start(clients, self.tidy())
+        self.assertEqual(self.post("nudge", "alpha", LANE), (502, {"ok": False, "error": "unreachable:TimeoutError"}))
+        self.assertEqual([send["name"] for send in t3.sends], ["t3_thread_send"])
+
+    def test_settle_still_replays_once_after_a_lost_response(self):
+        t3 = LosingT3()
+        clients = fleet_clients.Clients([Server()], factory=lambda url, token: Mcp(url, token, opener=t3.open))
+        self.start(clients, self.tidy())
+        self.assertEqual(self.post("settle", "alpha", CHILD)[1], {"ok": False, "error": "unreachable:TimeoutError"})
+        self.assertEqual([send["name"] for send in t3.sends], ["t3_thread_organize"] * 2)
 
     def test_refuses_a_thread_not_listed_under_tidy(self):
         clients = FakeClients()

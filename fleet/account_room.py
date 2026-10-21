@@ -1,5 +1,6 @@
 """Pure projection of Upkeep readings into the public account contract."""
 import math
+import re
 from datetime import datetime, timezone
 
 from .derive import ACTIVE
@@ -29,7 +30,8 @@ def project(raw, context):
     result = []
     for account in raw:
         window = next((item for item in account.get("allowances", [])
-                       if item.get("active") is True and item.get("label") == "weekly"), account)
+                       if item.get("active") is True
+                       and re.search(r"\bweekly\b", item.get("label") or "", re.IGNORECASE)), account)
         observed = (moment(window.get("observed_at")) or moment(account.get("observed_at"))
                     or moment(account.get("status_observed_at")))
         age = (context.now - observed).total_seconds() if observed else number(window.get("age_s"))

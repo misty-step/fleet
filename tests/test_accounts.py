@@ -57,6 +57,23 @@ class AccountsTest(unittest.TestCase):
                 self.assertEqual(result["pace"], expected)
                 self.assertEqual(result["runsOutAt"], None if burn <= 2 else RESET)
 
+    def test_weekly_allowance_labels(self):
+        for label in ["all models weekly", "Weekly", "Gemini · weekly", "Third-party models · weekly"]:
+            with self.subTest(label=label):
+                status = copy.deepcopy(STATUS)
+                status["accounts"][0]["allowances"][1]["label"] = label
+                result = self.project(status)
+                self.assertEqual((result["roomPercent"], result["pace"]), (48, "on_pace"))
+
+    def test_first_active_weekly_allowance_in_upkeep_order(self):
+        status = copy.deepcopy(STATUS)
+        allowances = status["accounts"][0]["allowances"]
+        for label, active in [("biweekly", True), ("Weekly", False), ("weeklyish", True)]:
+            allowances.insert(0, dict(allowances[-1], label=label, active=active, room_percent=1))
+        allowances.append(dict(allowances[-1], label="Gemini · weekly", room_percent=2))
+        result = self.project(status)
+        self.assertEqual((result["roomPercent"], result["pace"]), (48, "on_pace"))
+
     def test_slow_burn_outlasts_reset_even_without_upkeep_flag(self):
         status = copy.deepcopy(STATUS)
         status["accounts"][0]["allowances"][1]["pace"] = {

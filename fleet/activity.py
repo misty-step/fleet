@@ -5,7 +5,9 @@ Commands recognized as deploys: wrangler deploy/publish, vercel (deploy or
 Native tools: push_files, create_pull_request, merge_pull_request,
 add_issue_comment, create_pull_request_review, and deploy.
 Only command input is summarized, never command output.
-Partial: threadId -> {currentStep, lastSideEffect, runStartedAt}.
+Partial: threadId -> {currentStep, lastSideEffect, runStartedAt, error}. A thread whose
+read fails keeps its last good data, and `error` ({"error": short code, "since": first
+failure}) stays set until a read succeeds; each lane shows its subtree's as activityError.
 """
 import json
 import re
@@ -41,18 +43,66 @@ def summary(text, limit):
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+HEREDOC = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
+STATEMENT = re.compile(r"[\w.~/$][\w.+~/=$-]*$|\[\[?$|\]\]?$|[(){}!#]")   # how a statement's first word can start
+
+
+def command_lines(text):
+    """Shell statements from a command's text, one per logical line, input only.
+
+    A timeline command is "$ " and the command, then its output, with no marker
+    between them. Statements continue across lines inside quotes, after a trailing
+    backslash and through heredoc bodies; the first later line that cannot start a
+    shell statement (diff, log or tool output) begins the output and ends the
+    command. Output whose first lines read as commands can still be taken for input.
+    A `bash -c` script's own lines become statements too.
+    """
+    lines = (text or "").removeprefix("$ ").splitlines()
+    statements, index = [], 0
+    while index < len(lines):
+        statement, index = lines[index], index + 1
+        while True:
+            if statement.endswith("\\") and index < len(lines):
+                statement, index = statement[:-1] + lines[index], index + 1
+                continue
+            try:
+                words = shlex.split(statement, comments=True)
+            except ValueError:   # an open quote continues on the next line
+                if index < len(lines):
+                    statement, index = statement + "\n" + lines[index], index + 1
+                    continue
+                words = None
+            break
+        stripped = statement.strip()
+        if statements and stripped and not STATEMENT.match(stripped.split(None, 1)[0]):
+            break
+        for _, delimiter in HEREDOC.findall(statement):
+            if delimiter in (line.strip() for line in statement.splitlines()[1:]):
+                continue   # the body was inside the quoted statement
+            while index < len(lines) and lines[index].strip() != delimiter:
+                index += 1
+            index += 1
+        if (words and len(words) >= 3 and words[0].rsplit("/", 1)[-1] in {"bash", "sh", "zsh"}
+                and words[1] in {"-c", "-lc", "-ic"}):
+            statements.extend(command_lines(words[2]))
+        elif stripped:
+            statements.append(stripped)
+    return statements
+
+
 def command_text(text):
-    """The timeline's first line is input; later lines may contain output."""
-    first = (text or "").splitlines()[0] if text else ""
-    first = first.removeprefix("$ ")
-    try:
-        words = shlex.split(first)
-    except ValueError:
-        return first
-    if len(words) >= 3 and words[0].rsplit("/", 1)[-1] in {"bash", "sh", "zsh"}:
-        if words[1] in {"-c", "-lc", "-ic"}:
-            return words[2].splitlines()[0] if words[2] else ""
-    return first
+    """The command's first statement; its output is never read."""
+    statements = command_lines(text)
+    return statements[0] if statements else ""
+
+
+def command_effect(text):
+    """(kind, statement) of the command's first side effect, or (None, None)."""
+    for statement in command_lines(text):
+        kind = command_kind(statement)
+        if kind:
+            return kind, statement
+    return None, None
 
 
 def command_kind(command):
@@ -99,16 +149,15 @@ def command_kind(command):
 
 
 def describe(item):
-    """Return input-only step and side-effect kind from a summarized T3 item."""
+    """Return the input-only step, side-effect kind and side-effect text of a summarized T3 item."""
     text = item.get("text") or ""
     kind = item.get("type")
     if kind == "command_execution":
-        command = command_text(text)
-        return command, command_kind(command)
+        return (command_text(text),) + command_effect(text)
     if kind == "assistant_message":
-        return re.split(r"(?<=[.!?])\s|\n", text, maxsplit=1)[0], None
+        return re.split(r"(?<=[.!?])\s|\n", text, maxsplit=1)[0], None, None
     if kind not in {"dynamic_tool", "tool_call"}:
-        return None, None
+        return None, None, None
     try:
         payload = json.loads(text)
     except ValueError:
@@ -119,19 +168,19 @@ def describe(item):
             if match:
                 payload[key] = json.loads(match[1])
     if not isinstance(payload, dict):
-        return None, None
+        return None, None, None
     name = payload.get("toolName") or item.get("title") or "tool"
     inputs = payload.get("input") or payload.get("arguments") or payload
     if not isinstance(inputs, dict):
         inputs = {}
     command = inputs.get("cmd") or inputs.get("command")
     if isinstance(command, str):
-        command = command_text(command)
-        return command, command_kind(command)
+        return (command_text(command),) + command_effect(command)
     target = next((inputs[key] for key in ("threadId", "url", "repository", "path", "file_path")
                    if isinstance(inputs.get(key), str)), "")
     tool = re.split(r"[./]", name)[-1].removeprefix("mcp__github__")
-    return (name + " " + target).strip(), TOOL_KINDS.get(tool)
+    step = (name + " " + target).strip()
+    return step, TOOL_KINDS.get(tool), step
 
 
 class Activity:
@@ -146,12 +195,13 @@ class Activity:
         threads = (hub.partial("t3") or {}).get("threads", [])
         live = {(t["server"], t["threadId"]) for t in threads}
         self.threads = {key: state for key, state in self.threads.items() if key in live}
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         result = {}
         for thread in threads:
             key = thread["server"], thread["threadId"]
             state = self.threads.setdefault(key, {
                 "marker": None, "cursor": max(0, thread.get("itemCount", 0) - LOOKBACK),
-                "pending": {}, "stepPosition": -1, "runId": None,
+                "pending": {}, "stepPosition": -1, "runId": None, "error": None,
                 "data": {"currentStep": None, "lastSideEffect": None, "runStartedAt": None},
             })
             marker = thread.get("updatedAt"), thread.get("itemCount")
@@ -178,11 +228,15 @@ class Activity:
                         if not page.get("hasMore"):
                             break
                     state["marker"] = marker
-                except Exception:
+                    state["error"] = None
+                except Exception as error:   # keep the last good state; retry on the next cycle
+                    from .hub import describe as error_code   # hub imports this module
                     state = self.threads[key]
+                    since = (state["error"] or {}).get("since") or now
+                    state["error"] = {"error": error_code(error), "since": since}
                 else:
                     self.threads[key] = state
-            result[key[1]] = dict(state["data"])
+            result[key[1]] = dict(state["data"], error=state["error"])
         return result
 
     @staticmethod
@@ -195,7 +249,7 @@ class Activity:
             if item.get("visibility") == "inherited":
                 continue
             position = item["position"]
-            step, kind = describe(item)
+            step, kind, effect = describe(item)
             if step and position >= state["stepPosition"]:
                 state["data"]["currentStep"] = summary(step, 100)
                 state["stepPosition"] = position
@@ -207,18 +261,18 @@ class Activity:
                 previous = state["data"]["lastSideEffect"]
                 if previous is None or moment(item["updatedAt"]) >= moment(previous["at"]):
                     state["data"]["lastSideEffect"] = {
-                        "kind": kind, "summary": summary(step, 80), "at": item["updatedAt"]}
+                        "kind": kind, "summary": summary(effect, 80), "at": item["updatedAt"]}
 
 
 def apply(lanes, context):
-    """Use the lane's own latest step and its subtree's newest side effect."""
+    """Use the lane's own latest step, its subtree's newest side effect and oldest read failure."""
     children = {}
     for thread in context.threads:
         children.setdefault((thread["server"], thread.get("parentThreadId")), []).append(thread["threadId"])
     for lane in lanes:
         data = context.activity.get(lane["threadId"], {})
         lane["currentStep"] = data.get("currentStep")
-        effects, seen, stack = [], set(), [lane["threadId"]]
+        effects, errors, seen, stack = [], [], set(), [lane["threadId"]]
         while stack:
             thread_id = stack.pop()
             if thread_id in seen:
@@ -227,8 +281,12 @@ def apply(lanes, context):
             effect = context.activity.get(thread_id, {}).get("lastSideEffect")
             if effect and moment(effect.get("at")):
                 effects.append(effect)
+            error = context.activity.get(thread_id, {}).get("error")
+            if error:
+                errors.append(error)
             stack.extend(children.get((lane["server"], thread_id), []))
         lane["lastSideEffect"] = max(effects, key=lambda e: moment(e["at"]), default=None)
+        lane["activityError"] = dict(min(errors, key=lambda e: e["since"])) if errors else None
 
 
 def attention(lanes, context):
@@ -247,8 +305,9 @@ def attention(lanes, context):
         minutes = int(elapsed.total_seconds() // 60)
         hours, minutes = divmod(minutes, 60)
         duration = f"{hours} h {minutes} min" if hours else f"{minutes} min"
+        unread = "; activity could not be read" if lane.get("activityError") else ""
         result.append({"kind": "quiet", "severity": "warn", "threadId": lane["threadId"],
                        "server": lane["server"], "title": lane["title"], "laneTitle": lane["title"],
-                       "reason": "Running with no push, PR, merge, deploy or comment for " + duration,
+                       "reason": "Running with no push, PR, merge, deploy or comment for " + duration + unread,
                        "since": since.isoformat().replace("+00:00", "Z"), "prUrl": None})
     return result

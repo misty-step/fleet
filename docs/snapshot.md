@@ -56,6 +56,7 @@ Times are ISO 8601 UTC strings. Missing values are `null`, never omitted.
       "summary": "git push origin fix/447",
       "at": "…"
     },
+    "activityError": null,             // set while reading this lane's or a child's activity fails: {"error": short code, "since": first failure}; step and side effect may be stale
     "children": { "running": 2, "total": 7 },
     "prs": [{
       "repository": "misty-step/harness",

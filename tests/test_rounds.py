@@ -41,6 +41,16 @@ class TitleTest(unittest.TestCase):
             with self.subTest(title=title):
                 self.assertEqual(round_of(self.with_child(title)), expected)
 
+    def test_review_title_short_marker_takes_two_digits(self):
+        for title, expected in {"QA #338 r10": 10, "Review shop#338 r12, after fixes": 12,
+                                "Judge #338 (r11)": 11, "QA #338 r10 r2": 10}.items():
+            with self.subTest(title=title):
+                self.assertEqual(round_of(self.with_child(title)), expected)
+        lanes, ctx = [lane()], context(self.with_child("QA #338 r10"))
+        rounds.apply(lanes, ctx)
+        found = rounds.attention(lanes, ctx)
+        self.assertIn("fix round 9 (review round 10)", found[0]["reason"])
+
     def test_thread_id_names_the_pr_and_round(self):
         self.assertEqual(round_of(self.with_child("Recheck", thread_id="mcp:shop-pr338-r3")), 3)
 
@@ -53,6 +63,8 @@ class TitleTest(unittest.TestCase):
         self.assertIsNone(round_of(self.with_child("Builder for #338")))
         self.assertIsNone(round_of(self.with_child("QA round 2 for #339")))
         self.assertEqual(round_of(self.with_child("QA #338 (R75 importer) at r75-host")), 1)   # "R75" is a name, not round 75
+        self.assertEqual(round_of(self.with_child("QA #338 R75")), 1)
+        self.assertIsNone(round_of(self.with_child("Builder #338 r10")))   # two-digit "r" needs a review title
         self.assertIsNone(round_of([thread("lane", "Shop lane #338 round 4", prs=[PR])]))   # the lane itself is not a child
 
     def test_highest_round_wins_and_since_is_its_earliest_thread(self):

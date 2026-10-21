@@ -99,6 +99,12 @@ function sideEffect(e) {
   return `<span class="nowrap">${esc(ago(e.at))}</span><div class="sub mono" title="${esc(e.summary)}">${esc(e.kind)}</div>`;
 }
 
+// Step and side effect may be stale while the lane's activity cannot be read.
+function unread(e) {
+  if (!e) return "";
+  return `<div><span class="badge warn" title="Activity could not be read (${esc(e.error)}); step and side effect may be stale">Not read for ${esc(span(Date.now() - ms(e.since)))}</span></div>`;
+}
+
 // Open PRs carry the signal; merged and closed ones collapse to a count so busy lanes stay one glance tall.
 function prs(list) {
   if (!list.length) return `<span class="sub">—</span>`;
@@ -125,7 +131,7 @@ function renderLanes(s) {
         <div class="sub">${esc(l.server)} · ${esc(l.project)} · ${esc(l.account)} · ${esc(l.model)}</div></td>
       <td>${state(l.status)}${flags ? `<div>${flags}</div>` : ""}</td>
       <td class="hide-s">${l.currentStep ? `<div class="clamp" title="${esc(l.currentStep)}">${esc(l.currentStep)}</div>` : `<span class="sub">—</span>`}<div class="sub">updated ${esc(ago(l.updatedAt))}</div></td>
-      <td>${sideEffect(l.lastSideEffect)}</td>
+      <td>${sideEffect(l.lastSideEffect)}${unread(l.activityError)}</td>
       <td class="nowrap">${kids}</td>
       <td>${prs(l.prs)}</td>
     </tr>`;

@@ -3,8 +3,9 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from fleet import config, derive, hub, snapshot
+from fleet import config, derive, hub, rounds, snapshot
 from fleet.mcp import McpError
+from fleet.sources import t3
 from fleet.sources.t3 import T3
 
 NOW = datetime(2026, 10, 21, 23, 0, tzinfo=timezone.utc)
@@ -31,7 +32,11 @@ class FakeClients:
         self.pending = pending or {}      # threadId -> request IDs
         self.failing = set(failing)
         self.hanging = {}                 # server id -> Event its calls block on until set
+        self.broken = set()               # project names whose thread list fails
+        self.delay = 0                    # seconds each thread list call takes
         self.calls = []
+        self.lock = threading.Lock()
+        self.active = self.most = 0       # calls in flight now, and at most
 
     def ids(self):
         return list(self.servers)
@@ -47,6 +52,14 @@ class FakeClients:
             items, key = [{"id": "p-" + name, "title": name, "deletedAt": None} for name in projects], "projects"
         elif tool == "t3_thread_list":
             assert (arguments["settled"], arguments["includeSubagents"], arguments["limit"]) == (False, True, 100)
+            if arguments["projectId"][2:] in self.broken:
+                raise McpError("tool-error")
+            with self.lock:
+                self.active += 1
+                self.most = max(self.most, self.active)
+            time.sleep(self.delay)
+            with self.lock:
+                self.active -= 1
             items, key = projects[arguments["projectId"][2:]], "threads"
         elif tool == "t3_pending_request_list":
             return {"requestIds": self.pending.get(arguments["threadId"], [])}
@@ -145,6 +158,30 @@ class SourceTest(unittest.TestCase):
         source.collect(None)
         partial = source.collect(None)
         self.assertEqual((partial["servers"][1]["ok"], partial["servers"][1]["threads"]), (True, 2))
+
+    def test_lists_projects_concurrently_with_bounded_workers(self):
+        clients = FakeClients({"alpha": {"p%d" % n: [raw_thread("t%d" % n)] for n in range(40)}})
+        clients.delay = 0.1   # one at a time this server takes 4 s
+        began = time.monotonic()
+        partial = collect(clients)
+        self.assertLess(time.monotonic() - began, 1.5)
+        self.assertEqual(clients.most, t3.WORKERS)
+        self.assertEqual([t["threadId"] for t in partial["threads"]], ["t%d" % n for n in range(40)])
+        self.assertEqual(partial["servers"][0]["threads"], 40)
+
+    def test_one_failing_project_fails_its_server(self):
+        clients = FakeClients({"alpha": {"a": [raw_thread("a1")], "b": [raw_thread("b1")]}, "beta": {"p": [raw_thread("c1")]}})
+        clients.broken.add("b")
+        alpha, beta = collect(clients)["servers"]
+        self.assertEqual((alpha["ok"], alpha["error"]), (False, "tool-error"))
+        self.assertEqual((beta["ok"], beta["threads"]), (True, 1))
+
+    def test_pr_without_a_state_counts_as_open(self):
+        linked = [{"repository": "o/r", "number": n, "url": "https://github.com/o/r/pull/%d" % n, "state": state}
+                  for n, state in ((1, None), (2, "merged"), (3, "closed"), (4, "open"))]
+        partial = collect(FakeClients({"alpha": {"p": [raw_thread("t1", pullRequests=linked)]}}))
+        self.assertEqual([pr["state"] for pr in partial["threads"][0]["prs"]], ["open", "merged", "closed", "open"])
+        self.assertEqual([pr["number"] for pr in rounds.open_prs(partial["threads"])], [1, 4])
 
     def test_server_never_reached(self):
         partial = collect(FakeClients({"alpha": {}}, failing={"alpha"}))

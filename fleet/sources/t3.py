@@ -7,12 +7,14 @@ A normalized thread is:
    "createdAt", "updatedAt", "prs": [{"repository", "number", "url", "state"}],
    "pendingQuestions": int}
 `pendingQuestions` is null when a waiting thread's questions could not be read.
+A linked PR that T3 reports without a state counts as "open", so its loops are not missed.
 
 Each server is collected on its own; one failing marks only that server and keeps
 its last good threads. Each server has at most one request in flight, and a
 collection waits for it only until a deadline; the request carries on into later
 collections. Meanwhile the server shows its last result, or "slow" with its last
 good threads once the request has run past SLOW_SECONDS or if it never finished.
+Within one request, a server's projects are listed on up to WORKERS threads at once.
 """
 import threading
 import time
@@ -25,6 +27,7 @@ PAGE = 100
 MAX_PAGES = 200
 MARGIN_SECONDS = 3
 SLOW_SECONDS = 30
+WORKERS = 8
 
 
 def utc_now():
@@ -101,14 +104,15 @@ class T3:
                  "latencyMs": round((time.monotonic() - began) * 1000), "threads": len(threads)}, threads)
 
     def threads(self, server_id):
-        threads = []
-        for project in self.pages(server_id, "t3_project_list", {}, "projects"):
-            if project.get("deletedAt"):
-                continue
-            arguments = {"projectId": project["id"], "settled": False, "includeSubagents": True}
-            for raw in self.pages(server_id, "t3_thread_list", arguments, "threads"):
-                threads.append(self.normalize(server_id, project, raw))
-        return threads
+        projects = [project for project in self.pages(server_id, "t3_project_list", {}, "projects")
+                    if not project.get("deletedAt")]
+        return [thread for listed in fan_out(lambda project: self.project(server_id, project), projects)
+                for thread in listed]
+
+    def project(self, server_id, project):
+        arguments = {"projectId": project["id"], "settled": False, "includeSubagents": True}
+        return [self.normalize(server_id, project, raw)
+                for raw in self.pages(server_id, "t3_thread_list", arguments, "threads")]
 
     def pages(self, server_id, tool, arguments, key):
         """Every item of a cursor-paginated list tool."""
@@ -150,6 +154,38 @@ class T3:
         return len(result.get("requestIds") or [])
 
 
+def fan_out(function, items, workers=WORKERS):
+    """[function(item) for item in items] on up to `workers` daemon threads, in order; raises the first error.
+
+    Daemon threads, as in T3.start, so a hung call never holds up exit.
+    """
+    results, errors = [None] * len(items), []
+    pending = iter(enumerate(items))
+    lock = threading.Lock()
+
+    def work():
+        while True:
+            with lock:
+                index, item = next(pending, (None, None))
+                if index is None or errors:
+                    return
+            try:
+                results[index] = function(item)
+            except Exception as error:
+                with lock:
+                    errors.append(error)
+                return
+
+    threads = [threading.Thread(target=work, name="t3-project", daemon=True) for _ in range(min(workers, len(items)))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise errors[0]
+    return results
+
+
 def prs(raw):
     """Every linked pull request, including the legacy single link, once each."""
     linked = list(raw.get("pullRequests") or [])
@@ -161,5 +197,5 @@ def prs(raw):
             continue
         seen.add(pr["url"])
         result.append({"repository": pr.get("repository"), "number": pr.get("number"),
-                       "url": pr["url"], "state": pr.get("state")})
+                       "url": pr["url"], "state": pr.get("state") or "open"})
     return result

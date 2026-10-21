@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Fleet</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Fleet</h1>
+    <div id="servers" class="servers" aria-label="T3 servers"></div>
+    <div class="spacer"></div>
+    <div id="live" class="live" role="status" aria-live="polite"><span class="dot"></span><span>Connecting…</span></div>
+  </header>
+  <main>
+    <section id="stats" class="stats" aria-label="Summary"></section>
+
+    <section aria-labelledby="h-attention">
+      <h2 id="h-attention">Needs attention <span class="c" id="c-attention"></span></h2>
+      <div id="attention" class="panel"></div>
+    </section>
+
+    <section aria-labelledby="h-lanes">
+      <h2 id="h-lanes">Lanes <span class="c" id="c-lanes"></span></h2>
+      <div id="lanes" class="panel"></div>
+    </section>
+
+    <div class="grid2">
+      <section aria-labelledby="h-tidy">
+        <h2 id="h-tidy">Needs tidying <span class="c" id="c-tidy"></span></h2>
+        <div id="tidy" class="panel"></div>
+      </section>
+      <section aria-labelledby="h-accounts">
+        <h2 id="h-accounts">Account room <span class="c">target: every week used to zero at reset</span></h2>
+        <div id="accounts" class="panel"></div>
+      </section>
+    </div>
+
+    <footer id="footer"></footer>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

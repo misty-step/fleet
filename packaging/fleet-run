@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Start Fleet with each server's token injected from pass. Prints no secrets.
+set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")/.."
+config="${FLEET_CONFIG:-$HOME/.config/fleet/config.toml}"
+read -r -a args <<<"$(python3 -m fleet pass-env-args --config "$config")"
+exec "${PASS_ENV:-$HOME/.local/bin/pass-env}" run "${args[@]}" -- python3 -m fleet serve --config "$config"

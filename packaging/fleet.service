@@ -1,0 +1,12 @@
+[Unit]
+Description=Fleet: live view of every agent across the T3 fleet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/lib/fleet/current/packaging/fleet-run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

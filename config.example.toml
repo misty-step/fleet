@@ -1,0 +1,29 @@
+# Copy to ~/.config/fleet/config.toml. Tokens are never written here: each server
+# names an environment variable, filled from pass by the service (see packaging/).
+bind = "127.0.0.1"
+port = 8797
+base_path = "/fleet"
+interval_seconds = 5
+# Harness lane roster (wipRoots): a local t3-pool.json path or an https URL.
+roster = "~/.config/t3-pool.json"
+# Upkeep's published status (per-account room, reset and burn).
+upkeep_status_url = "https://upkeep.example.ts.net/upkeep/status.json"
+
+[[servers]]
+id = "alpha"
+url = "https://alpha.example.ts.net/mcp"
+token_env = "FLEET_TOKEN_ALPHA"
+token_pass = "example/alpha-orchestration-mcp"
+
+[[servers]]
+id = "beta"
+url = "https://beta.example.ts.net/mcp"
+token_env = "FLEET_TOKEN_BETA"
+token_pass = "example/beta-orchestration-mcp"
+
+[thresholds]
+quiet_hours = 2
+waiting_minutes = 15
+tidy_minutes = 30
+stale_hours = 24
+loop_round = 2

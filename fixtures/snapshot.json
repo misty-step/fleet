@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-21T23:00:00Z",
+  "thresholds": {"quietHours": 2, "waitingMinutes": 15, "tidyMinutes": 30, "staleHours": 24, "loopRound": 2},
+  "summary": {"lanes": 5, "running": 3, "loops": 1, "waiting": 1, "stalled": 2, "tidy": 3},
+  "servers": [
+    {"id": "alpha", "ok": true, "error": null, "lastSeenAt": "2026-10-21T22:59:56Z", "latencyMs": 880, "threads": 42},
+    {"id": "beta", "ok": true, "error": null, "lastSeenAt": "2026-10-21T22:59:58Z", "latencyMs": 210, "threads": 6},
+    {"id": "gamma", "ok": false, "error": "unreachable:URLError", "lastSeenAt": "2026-10-21T22:55:10Z", "latencyMs": null, "threads": 0}
+  ],
+  "attention": [
+    {"kind": "loop", "severity": "bad", "threadId": "mcp:lane-shop", "server": "alpha", "title": "Shop: checkout rewrite", "laneTitle": "Shop: checkout rewrite", "reason": "PR #338 is at fix round 3", "since": "2026-10-21T22:19:00Z", "prUrl": "https://github.com/example/shop/pull/338"},
+    {"kind": "failed", "severity": "bad", "threadId": "mcp:lane-disk", "server": "alpha", "title": "Disk errors: which files", "laneTitle": "Disk errors: which files", "reason": "Latest run failed", "since": "2026-10-21T22:22:00Z", "prUrl": null},
+    {"kind": "waiting", "severity": "warn", "threadId": "thread:child-judge-338", "server": "alpha", "title": "Judge shop#338 round 3", "laneTitle": "Shop: checkout rewrite", "reason": "Waiting on an approval or question for 1 h 7 min", "since": "2026-10-21T21:53:00Z", "prUrl": null},
+    {"kind": "quiet", "severity": "warn", "threadId": "mcp:lane-index", "server": "alpha", "title": "Index: every project", "laneTitle": "Index: every project", "reason": "Running with no push, PR, merge, deploy or comment for 3 h 20 min", "since": "2026-10-21T19:38:00Z", "prUrl": null}
+  ],
+  "lanes": [
+    {"threadId": "mcp:lane-shop", "server": "alpha", "project": "shop", "title": "Shop: checkout rewrite", "roster": true, "status": "running", "currentStep": "Fix checkout session (round 3)", "lastSideEffect": {"kind": "push", "summary": "git push origin fix/338", "at": "2026-10-21T22:56:00Z"}, "children": {"running": 3, "total": 11}, "prs": [{"repository": "example/shop", "number": 338, "url": "https://github.com/example/shop/pull/338", "state": "open", "round": 3}], "account": "codex-main", "model": "gpt-6.1-sol", "updatedAt": "2026-10-21T22:59:00Z", "flags": ["loop", "waiting"]},
+    {"threadId": "mcp:lane-disk", "server": "alpha", "project": "ops", "title": "Disk errors: which files", "roster": false, "status": "failed", "currentStep": "Scan drive logs", "lastSideEffect": null, "children": {"running": 0, "total": 0}, "prs": [], "account": "claude-team", "model": "claude-sonnet-5-5", "updatedAt": "2026-10-21T22:22:00Z", "flags": ["failed"]},
+    {"threadId": "mcp:lane-index", "server": "alpha", "project": "index", "title": "Index: every project", "roster": true, "status": "running", "currentStep": "Read-only audit of project index", "lastSideEffect": {"kind": "push", "summary": "git push origin feat/212", "at": "2026-10-21T19:38:00Z"}, "children": {"running": 4, "total": 9}, "prs": [{"repository": "example/index", "number": 212, "url": "https://github.com/example/index/pull/212", "state": "open", "round": 1}], "account": "codex-main", "model": "gpt-6.1-sol", "updatedAt": "2026-10-21T22:58:00Z", "flags": ["quiet"]},
+    {"threadId": "mcp:lane-policy", "server": "beta", "project": "policy", "title": "Policy: verification everywhere", "roster": true, "status": "running", "currentStep": "Recheck blocker on policy#447", "lastSideEffect": {"kind": "comment", "summary": "gh pr comment 447", "at": "2026-10-21T22:48:00Z"}, "children": {"running": 2, "total": 5}, "prs": [{"repository": "example/policy", "number": 447, "url": "https://github.com/example/policy/pull/447", "state": "open", "round": 1}, {"repository": "example/policy", "number": 440, "url": "https://github.com/example/policy/pull/440", "state": "merged", "round": 1}], "account": "claude-main", "model": "claude-opus-5-5", "updatedAt": "2026-10-21T22:59:30Z", "flags": []},
+    {"threadId": "mcp:lane-notes", "server": "beta", "project": "notes", "title": "Notes as shared context", "roster": false, "status": "completed", "currentStep": null, "lastSideEffect": {"kind": "merge", "summary": "gh pr merge 15 --squash", "at": "2026-10-21T19:42:00Z"}, "children": {"running": 0, "total": 2}, "prs": [{"repository": "example/notes", "number": 15, "url": "https://github.com/example/notes/pull/15", "state": "merged", "round": 1}], "account": "claude-main", "model": "claude-opus-5-5", "updatedAt": "2026-10-21T19:42:00Z", "flags": []}
+  ],
+  "tidy": [
+    {"threadId": "mcp:lane-notes", "server": "beta", "title": "Notes as shared context", "parentTitle": null, "status": "completed", "reason": "Completed, not settled", "idleSince": "2026-10-21T19:42:00Z", "roster": false, "actions": ["settle"]},
+    {"threadId": "thread:child-qa-446", "server": "alpha", "title": "QA+review policy#446", "parentTitle": "Policy: verification everywhere", "status": "completed", "reason": "Completed, not settled", "idleSince": "2026-10-21T19:45:00Z", "roster": false, "actions": ["settle"]},
+    {"threadId": "mcp:lane-billing", "server": "alpha", "title": "Verify: billing", "parentTitle": null, "status": "idle", "reason": "Idle for over 24 h", "idleSince": "2026-10-20T15:58:00Z", "roster": true, "actions": ["settle", "nudge"]}
+  ],
+  "accounts": [
+    {"id": "claude-main", "name": "Claude Max 1", "provider": "anthropic", "state": "current", "roomPercent": 62.0, "resetsAt": "2026-10-25T14:59:59Z", "pace": "on_pace", "burnPerHour": 0.6, "sustainablePerHour": 0.66, "runsOutAt": null, "running": 3},
+    {"id": "claude-team", "name": "Claude Team", "provider": "anthropic", "state": "current", "roomPercent": 41.0, "resetsAt": "2026-10-25T10:00:00Z", "pace": "too_fast", "burnPerHour": 1.18, "sustainablePerHour": 0.44, "runsOutAt": "2026-10-23T10:04:41Z", "running": 2},
+    {"id": "codex-main", "name": "ChatGPT Pro 2", "provider": "codex", "state": "current", "roomPercent": 24.0, "resetsAt": "2026-10-28T00:24:44Z", "pace": "too_fast", "burnPerHour": 1.51, "sustainablePerHour": 0.16, "runsOutAt": "2026-10-22T15:05:31Z", "running": 6},
+    {"id": "gemini", "name": "Google Antigravity", "provider": "google", "state": "current", "roomPercent": 96.0, "resetsAt": "2026-10-24T15:08:34Z", "pace": "too_slow", "burnPerHour": 0.02, "sustainablePerHour": 1.4, "runsOutAt": null, "running": 1},
+    {"id": "claude-spare", "name": "Claude Max 2", "provider": "anthropic", "state": "unknown", "roomPercent": null, "resetsAt": null, "pace": "unknown", "burnPerHour": null, "sustainablePerHour": null, "runsOutAt": null, "running": 0}
+  ],
+  "sources": {
+    "t3": {"ok": true, "at": "2026-10-21T22:59:58Z", "error": null},
+    "accounts": {"ok": true, "at": "2026-10-21T22:59:40Z", "error": null},
+    "roster": {"ok": true, "at": "2026-10-21T22:59:00Z", "error": null}
+  }
+}

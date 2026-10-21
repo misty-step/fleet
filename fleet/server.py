@@ -76,7 +76,13 @@ def make_handler(hub, base_path, actions):
             self.send_json(action_status(result), result)
 
         def read_body(self):
-            """Read the whole request body so a kept-alive connection stays in sync; refuse oversized ones."""
+            """Read the whole request body so a kept-alive connection stays in sync; refuse oversized ones.
+
+            Bodies we cannot frame (chunked or other transfer codings, bad lengths) close the connection.
+            """
+            if self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
+                return None
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -87,12 +93,18 @@ def make_handler(hub, base_path, actions):
             return self.rfile.read(length)
 
         def same_origin(self):
-            """A browser's Origin, when sent, must name this host (directly or as the proxy forwarded it)."""
+            """A browser's Origin, when sent, must match this site's scheme and host.
+
+            Behind `tailscale serve` the scheme arrives as X-Forwarded-Proto and the host as Host and
+            X-Forwarded-Host; served directly, the scheme is http.
+            """
             origin = self.headers.get("Origin")
             if origin is None:
                 return True
+            scheme = (self.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip().lower()
             hosts = {self.headers.get("Host"), self.headers.get("X-Forwarded-Host")} - {None}
-            return urlsplit(origin).netloc in hosts
+            parts = urlsplit(origin)
+            return parts.scheme.lower() == scheme and parts.netloc in hosts
 
         def stream(self):
             self.send_response(HTTPStatus.OK)

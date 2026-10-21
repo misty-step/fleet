@@ -75,11 +75,46 @@ class ServerTest(unittest.TestCase):
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         payload = json.dumps({"server": "a", "threadId": "t"})
         connection.request("POST", "/fleet/api/actions/settle", body=payload, headers={"Content-Type": "application/json"})
-        self.assertEqual(connection.getresponse().read() and 403, 403)
+        refused = connection.getresponse()
+        refused.read()
+        self.assertEqual(refused.status, 403)
         connection.request("GET", "/fleet/api/snapshot")
         response = connection.getresponse()
         self.assertEqual((response.status, json.loads(response.read())), (200, FIXTURE))
         connection.close()
+
+    def test_chunked_refusal_closes_instead_of_desyncing(self):
+        import socket
+        port = self.app.httpd.server_address[1]
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall(b"POST /fleet/api/actions/settle HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                         b"2\r\n{}\r\n0\r\n\r\n"
+                         b"GET /fleet/api/snapshot HTTP/1.1\r\nHost: x\r\n\r\n")
+            received = b""
+            while chunk := sock.recv(65536):
+                received += chunk
+        self.assertTrue(received.startswith(b"HTTP/1.1 403"))
+        self.assertNotIn(b"400", received)
+        self.assertEqual(received.count(b"HTTP/1.1 "), 1)
+
+    def test_direct_same_origin_is_allowed(self):
+        app = Running(hub.FixedHub(FIXTURE), actions={"settle": lambda s, t: {"ok": True, "error": None}})
+        origin = app.base  # http://127.0.0.1:<port>, the Host urllib sends
+        try:
+            status, _ = app.post("/fleet/api/actions/settle", {"server": "a", "threadId": "t"},
+                                 {"X-Fleet-Action": "1", "Origin": origin})
+        finally:
+            app.httpd.shutdown()
+        self.assertEqual(status, 200)
+
+    def test_origin_with_the_wrong_scheme_is_refused(self):
+        app = Running(hub.FixedHub(FIXTURE), actions={"settle": lambda s, t: {"ok": True, "error": None}})
+        headers = {"X-Fleet-Action": "1", "Origin": "https://fleet.example", "Host": "fleet.example"}
+        try:
+            status, body = app.post("/fleet/api/actions/settle", {"server": "a", "threadId": "t"}, headers)
+        finally:
+            app.httpd.shutdown()
+        self.assertEqual((status, body["error"]), (403, "cross-origin"))
 
     def test_cross_origin_is_refused(self):
         headers = {"X-Fleet-Action": "1", "Origin": "https://elsewhere.example"}
@@ -88,7 +123,8 @@ class ServerTest(unittest.TestCase):
 
     def test_same_origin_through_a_proxy_is_allowed(self):
         app = Running(hub.FixedHub(FIXTURE), actions={"settle": lambda s, t: {"ok": True, "error": None}})
-        headers = {"X-Fleet-Action": "1", "Origin": "https://fleet.example", "X-Forwarded-Host": "fleet.example"}
+        headers = {"X-Fleet-Action": "1", "Origin": "https://fleet.example", "X-Forwarded-Host": "fleet.example",
+                   "X-Forwarded-Proto": "https"}
         try:
             status, _ = app.post("/fleet/api/actions/settle", {"server": "a", "threadId": "t"}, headers)
         finally:

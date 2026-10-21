@@ -38,7 +38,7 @@ Times are ISO 8601 UTC strings. Missing values are `null`, never omitted.
     "server": "mirrodin",
     "title": "Tach",                   // thread title
     "laneTitle": "Tach",               // owning top-level lane title (same as title for lanes)
-    "reason": "PR #338 is at fix round 3",
+    "reason": "PR #338 is at fix round 2 (review round 3)",
     "since": "…",                      // when this condition started, best known
     "prUrl": null                      // set for loops
   }],

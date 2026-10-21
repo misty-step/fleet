@@ -9,7 +9,7 @@
     {"id": "gamma", "ok": false, "error": "unreachable:URLError", "lastSeenAt": "2026-10-21T22:55:10Z", "latencyMs": null, "threads": 0}
   ],
   "attention": [
-    {"kind": "loop", "severity": "bad", "threadId": "mcp:lane-shop", "server": "alpha", "title": "Shop: checkout rewrite", "laneTitle": "Shop: checkout rewrite", "reason": "PR #338 is at fix round 3", "since": "2026-10-21T22:19:00Z", "prUrl": "https://github.com/example/shop/pull/338"},
+    {"kind": "loop", "severity": "bad", "threadId": "mcp:lane-shop", "server": "alpha", "title": "Shop: checkout rewrite", "laneTitle": "Shop: checkout rewrite", "reason": "PR #338 is at fix round 2 (review round 3)", "since": "2026-10-21T22:19:00Z", "prUrl": "https://github.com/example/shop/pull/338"},
     {"kind": "failed", "severity": "bad", "threadId": "mcp:lane-disk", "server": "alpha", "title": "Disk errors: which files", "laneTitle": "Disk errors: which files", "reason": "Latest run failed", "since": "2026-10-21T22:22:00Z", "prUrl": null},
     {"kind": "waiting", "severity": "warn", "threadId": "thread:child-judge-338", "server": "alpha", "title": "Judge shop#338 round 3", "laneTitle": "Shop: checkout rewrite", "reason": "Waiting on an approval or question for 1 h 7 min", "since": "2026-10-21T21:53:00Z", "prUrl": null},
     {"kind": "quiet", "severity": "warn", "threadId": "mcp:lane-index", "server": "alpha", "title": "Index: every project", "laneTitle": "Index: every project", "reason": "Running with no push, PR, merge, deploy or comment for 3 h 20 min", "since": "2026-10-21T19:38:00Z", "prUrl": null}

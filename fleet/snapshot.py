@@ -1,7 +1,7 @@
 """Assemble the published snapshot (docs/snapshot.md) from the latest source partials."""
 from datetime import timezone
 
-from . import derive
+from . import activity, derive, rounds
 
 SCHEMA_VERSION = 1
 
@@ -22,7 +22,10 @@ def assemble(partials, config, now):
         threads=t3.get("threads", []), roster=roster, now=now, thresholds=config.thresholds,
         activity=data(partials, "activity", {}), rounds=data(partials, "rounds", {}))
     lanes = derive.lanes(context)
-    attention = derive.attention(context, lanes)
+    activity.apply(lanes, context)
+    rounds.apply(lanes, context)
+    attention = derive.order(derive.attention(context, lanes) + activity.attention(lanes, context)
+                             + rounds.attention(lanes, context))
     tidy = derive.tidy(context)
     accounts = derive.accounts(data(partials, "accounts", {}).get("accounts", []), context)
     flagged = {}

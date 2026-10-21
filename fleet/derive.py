@@ -27,6 +27,11 @@ def attention(context, lanes):
     return []
 
 
+def order(items):
+    """Worst first: bad before warn, then the oldest condition first."""
+    return sorted(items, key=lambda item: (item["severity"] != "bad", item.get("since") or ""))
+
+
 def tidy(context):
     return []
 

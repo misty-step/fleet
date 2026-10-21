@@ -6,6 +6,7 @@ import sys
 from . import config as configuration
 from . import hub as hubs
 from . import server, sources
+from .clients import Clients
 
 
 def main(argv=None):
@@ -27,13 +28,15 @@ def main(argv=None):
         print(" ".join(f"-e {s.token_env}={s.token_pass}" for s in config.servers if s.token_pass))
         return 0
 
+    clients = None
     if args.command == "serve" and args.fixture:
         config = configuration.parse({})
         with open(args.fixture) as handle:
             hub = hubs.FixedHub(json.load(handle))
     else:
         config = configuration.load(args.config)
-        hub = hubs.Hub(config, sources.build(config))
+        clients = Clients(config.servers)
+        hub = hubs.Hub(config, sources.build(config, clients))
     if args.command == "snapshot":
         for source in hub.sources:
             hub.run_once(source)
@@ -41,7 +44,7 @@ def main(argv=None):
         print()
         return 0
     from . import actions
-    server.serve(hub, args.bind or config.bind, args.port or config.port, config.base_path, actions.build(config))
+    server.serve(hub, args.bind or config.bind, args.port or config.port, config.base_path, actions.build(config, clients))
     return 0
 
 

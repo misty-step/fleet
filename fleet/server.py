@@ -5,6 +5,7 @@ behind `tailscale serve --set-path /fleet/` whether or not the proxy strips the 
 The page uses relative URLs for the same reason.
 """
 import json
+from urllib.parse import urlsplit
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +14,14 @@ WEB = Path(__file__).resolve().parent.parent / "web"
 STATIC = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
           "style.css": "text/css; charset=utf-8"}
 KEEPALIVE_SECONDS = 15
+MAX_BODY = 65536
+
+
+def action_status(result):
+    """200 on success; 409 when the action refused (codes starting "not-"); 502 when T3 failed."""
+    if result.get("ok"):
+        return HTTPStatus.OK
+    return HTTPStatus.CONFLICT if str(result.get("error", "")).startswith("not-") else HTTPStatus.BAD_GATEWAY
 
 
 def make_handler(hub, base_path, actions):
@@ -45,6 +54,7 @@ def make_handler(hub, base_path, actions):
             self.send_body(HTTPStatus.NOT_FOUND, "text/plain", b"not found\n")
 
         def do_POST(self):
+            raw = self.read_body()
             path = self.route()
             prefix = "/api/actions/"
             if not path.startswith(prefix):
@@ -52,17 +62,49 @@ def make_handler(hub, base_path, actions):
             # Cross-site pages cannot send a custom header without a CORS preflight, which we never grant.
             if self.headers.get("X-Fleet-Action") != "1":
                 return self.send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "missing-header"})
+            if not self.same_origin():
+                return self.send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "cross-origin"})
             action = actions.get(path[len(prefix):])
             if action is None:
                 return self.send_json(HTTPStatus.NOT_IMPLEMENTED, {"ok": False, "error": "unknown-action"})
             try:
-                length = min(int(self.headers.get("Content-Length") or 0), 65536)
-                body = json.loads(self.rfile.read(length) or b"{}")
+                body = json.loads(raw or b"{}")
                 server, thread = str(body["server"]), str(body["threadId"])
             except (ValueError, KeyError, TypeError):
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "bad-request"})
             result = action(server, thread)
-            self.send_json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY, result)
+            self.send_json(action_status(result), result)
+
+        def read_body(self):
+            """Read the whole request body so a kept-alive connection stays in sync; refuse oversized ones.
+
+            Bodies we cannot frame (chunked or other transfer codings, bad lengths) close the connection.
+            """
+            if self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
+                return None
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0 or length > MAX_BODY:
+                self.close_connection = True
+                return None
+            return self.rfile.read(length)
+
+        def same_origin(self):
+            """A browser's Origin, when sent, must match this site's scheme and host.
+
+            Behind `tailscale serve` the scheme arrives as X-Forwarded-Proto and the host as Host and
+            X-Forwarded-Host; served directly, the scheme is http.
+            """
+            origin = self.headers.get("Origin")
+            if origin is None:
+                return True
+            scheme = (self.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip().lower()
+            hosts = {self.headers.get("Host"), self.headers.get("X-Forwarded-Host")} - {None}
+            parts = urlsplit(origin)
+            return parts.scheme.lower() == scheme and parts.netloc in hosts
 
         def stream(self):
             self.send_response(HTTPStatus.OK)

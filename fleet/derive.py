@@ -37,4 +37,5 @@ def tidy(context):
 
 
 def accounts(raw, context):
-    return []
+    from .account_room import project
+    return project(raw, context)

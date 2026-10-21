@@ -33,6 +33,7 @@ def assemble(partials, config, now):
         flagged.setdefault(item["threadId"], set()).add(item["kind"])
     for lane in lanes:
         lane["flags"] = sorted(set(lane.get("flags", [])) | flagged.get(lane["threadId"], set()))
+    lanes = derive.order_lanes(lanes)
     kinds = [item["kind"] for item in attention]
     return {
         "schemaVersion": SCHEMA_VERSION,

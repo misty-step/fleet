@@ -45,6 +45,21 @@ def pool(sessions=3):
 
 
 class ClientsTest(unittest.TestCase):
+    def test_a_transport_failure_drops_every_idle_session_so_a_single_send_fails_at_most_once(self):
+        clients, opened = pool(sessions=3)
+        threads = [threading.Thread(target=clients.call, args=("alpha", "read", {"sleep": 0.05})) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(clients.idle["alpha"]), 3)
+        for session in opened:   # the server restarted: every pooled session is now stale
+            session.call = lambda tool, arguments: (_ for _ in ()).throw(McpError("http-404"))
+        with self.assertRaises(McpError):
+            clients.call("alpha", "t3_thread_send", {}, retry=False)
+        self.assertEqual(clients.idle["alpha"], [])
+        self.assertEqual(clients.call("alpha", "t3_thread_send", {}, retry=False), {"tool": "t3_thread_send"})
+
     def test_concurrent_calls_use_separate_sessions_up_to_the_bound(self):
         clients, opened = pool(sessions=3)
         threads = [threading.Thread(target=clients.call, args=("alpha", "read", {"sleep": 0.1})) for _ in range(9)]

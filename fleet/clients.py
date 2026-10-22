@@ -40,6 +40,9 @@ class Clients:
                         session = self.factory(server.url, server.token())
                     result = session.call(tool, arguments)
                 except McpError as error:
+                    if not str(error).startswith("tool-"):
+                        with self.guard:   # one transport failure means the server's other idle sessions are suspect too
+                            self.idle[server_id].clear()
                     if attempt == 2 or str(error).startswith("tool-"):
                         raise
                     failed = True

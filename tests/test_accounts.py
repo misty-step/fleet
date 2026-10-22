@@ -109,14 +109,70 @@ class AccountsTest(unittest.TestCase):
                            ("resets_at", NOW.isoformat()), ("room_percent", float("nan"))]:
             with self.subTest(key=key, value=value):
                 status = copy.deepcopy(STATUS)
-                status["accounts"][0]["allowances"][1][key] = value
+                account = status["accounts"][0]
+                account["allowances"][1][key] = value
+                account[key] = value
                 self.assertEqual(self.project(status)["pace"], "unknown")
         status = copy.deepcopy(STATUS)
-        status["accounts"][0]["allowances"][1]["pace"] = {}
-        self.assertEqual(self.project(status)["pace"], "unknown")
+        status["accounts"][0]["allowances"][1]["pace"] = {"burn_pp_per_hour": None}
+        self.assertEqual(self.project(status)["pace"], "too_slow")
         for state in ["stale", "unknown"]:
             status["accounts"][0]["state"] = state
             self.assertEqual(self.project(status)["pace"], "unknown")
+
+    def test_missing_weekly_room_falls_back_to_account_room(self):
+        status = copy.deepcopy(STATUS)
+        status["accounts"][0]["allowances"][1]["room_percent"] = None
+        result = self.project(status)
+        self.assertEqual((result["roomPercent"], result["resetsAt"]), (10, RESET))
+        self.assertEqual(result["pace"], "too_fast")
+
+    def test_missing_weekly_reset_falls_back_to_account_reset(self):
+        status = copy.deepcopy(STATUS)
+        account = status["accounts"][0]
+        account["resets_at"] = "2026-10-23T12:00:00Z"
+        account["allowances"][1]["resets_at"] = None
+        account["allowances"][1]["pace"] = {"burn_pp_per_hour": 1}
+        result = self.project(status)
+        self.assertEqual((result["roomPercent"], result["resetsAt"], result["pace"]),
+                         (48, "2026-10-23T12:00:00Z", "on_pace"))
+
+    def test_no_burn_reading_with_room_far_above_target_is_too_slow(self):
+        status = copy.deepcopy(STATUS)
+        account = status["accounts"][0]
+        account["allowances"][1].update(room_percent=97, resets_at="2026-10-23T12:00:00Z")
+        account["allowances"][1].pop("pace")
+        result = self.project(status)
+        self.assertEqual((result["roomPercent"], result["pace"], result["burnPerHour"],
+                          result["sustainablePerHour"], result["runsOutAt"]),
+                         (97, "too_slow", None, None, None))
+
+    def test_no_burn_reading_stays_unknown_inside_the_slow_threshold(self):
+        # Two days to reset: target 48/168 = 28.6%. Too slow needs over 42.9% and over 48.6%.
+        status = copy.deepcopy(STATUS)
+        account = status["accounts"][0]
+        account["allowances"][1].update(resets_at="2026-10-23T12:00:00Z")
+        account["allowances"][1].pop("pace")
+        for room, expected in [(43, "unknown"), (48, "unknown"), (49, "too_slow")]:
+            with self.subTest(room=room):
+                account["allowances"][1]["room_percent"] = room
+                self.assertEqual(self.project(status)["pace"], expected)
+
+    def test_coded_source_errors_name_the_failure_without_the_body(self):
+        status = copy.deepcopy(STATUS)
+        with patch("fleet.sources.accounts.urllib.request.urlopen", side_effect=OSError("token-in-body")):
+            source = Accounts("https://upkeep.example.invalid/status.json")
+            the_hub = hub.Hub(config.Config(), [source], clock=lambda: NOW)
+            the_hub.run_once(source)
+        self.assertEqual(the_hub.current["sources"]["accounts"]["error"], "accounts-unavailable")
+        with patch("fleet.sources.accounts.urllib.request.urlopen", return_value=io.BytesIO(b'{"accounts": 1}')):
+            the_hub.run_once(source)
+        self.assertEqual(the_hub.current["sources"]["accounts"]["error"], "accounts-invalid-status")
+        self.assertNotIn("token-in-body", the_hub.encoded)
+        status["accounts"] = ["not-an-object"]
+        with patch("fleet.sources.accounts.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(status).encode())):
+            the_hub.run_once(source)
+        self.assertEqual(the_hub.current["sources"]["accounts"]["error"], "accounts-invalid-account")
 
     def test_no_url_is_empty_without_network(self):
         with patch("fleet.sources.accounts.urllib.request.urlopen") as fetch:

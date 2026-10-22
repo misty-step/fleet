@@ -206,6 +206,10 @@ function paceDetail(a) {
     const left = Math.max(0, a.roomPercent - a.burnPerHour * hours);
     return `about ${Math.round(left)}% will go unused`;
   }
+  if (a.pace === "too_slow" && a.roomPercent != null && a.resetsAt) {
+    const target = Math.max(0, (ms(a.resetsAt) - Date.now()) / WEEK_MS * 100);
+    return `approximate, no burn reading: ${Math.round(a.roomPercent)}% left, about ${Math.round(target)}% on pace`;
+  }
   if (a.burnPerHour != null && a.sustainablePerHour != null) return `${a.burnPerHour.toFixed(2)} vs ${a.sustainablePerHour.toFixed(2)} pts/h`;
   return a.state === "unknown" ? "no current reading" : esc(a.state);
 }

@@ -201,12 +201,77 @@ class ActivityTest(unittest.TestCase):
         source, hub, first = self.collect(clients, current)
         before = copy.deepcopy(source.threads[("alpha", "lane")])
         current[0]["updatedAt"] = "2026-10-21T23:01:00Z"
-        self.assertEqual(source.collect(hub), first)
-        self.assertEqual(source.threads[("alpha", "lane")], before)
+        failed = source.collect(hub)
+        self.assertEqual(failed["lane"].pop("error")["error"], "RuntimeError")
+        self.assertEqual(failed, {"lane": {k: v for k, v in first["lane"].items() if k != "error"}})
+        self.assertEqual(dict(source.threads[("alpha", "lane")], error=None), before)
         result = source.collect(hub)
         self.assertEqual(result["lane"]["lastSideEffect"]["kind"], "deploy")
         self.assertEqual([c[2].get("afterPosition") for c in clients.calls],
                          [0, None, 1, 2, None, 1, 2])
+
+
+    def test_read_failure_is_marked_until_a_read_succeeds(self):
+        clients = FakeClients(page([item()]), RuntimeError("synthetic failure"),
+                              RuntimeError("synthetic failure"), page([]))
+        current = [thread(), thread("child", "lane")]
+        source, hub, first = self.collect(clients, current)
+        self.assertIsNone(first["lane"]["error"])
+        self.assertEqual(first["child"]["error"]["error"], "RuntimeError")
+        since = first["child"]["error"]["since"]
+        current[1]["updatedAt"] = "2026-10-21T23:01:00Z"
+        second = source.collect(hub)
+        self.assertEqual(second["child"]["error"], {"error": "RuntimeError", "since": since})
+        self.assertEqual(second["lane"]["lastSideEffect"]["kind"], "push")   # healthy data stays
+        context = derive.Context(current, set(), datetime.now(timezone.utc), config.Thresholds(), second)
+        lanes = [{"threadId": "lane", "server": "alpha"}]
+        activity.apply(lanes, context)
+        self.assertEqual(lanes[0]["activityError"], {"error": "RuntimeError", "since": since})
+        self.assertNotIn("synthetic", json.dumps(second))
+        current[1]["updatedAt"] = "2026-10-21T23:02:00Z"
+        context.activity = source.collect(hub)
+        activity.apply(lanes, context)
+        self.assertIsNone(lanes[0]["activityError"])
+
+
+class CommandTest(unittest.TestCase):
+    def effect(self, text):
+        return activity.describe({"type": "command_execution", "text": text})
+
+    def test_side_effect_on_a_later_line(self):
+        cases = {
+            "$ set -e\ngit push origin main\nTo example.test:repo.git": ("push", "git push origin main"),
+            "$ cd /repo\ngit add . &&\ngit commit -m \"title\n\nbody\" &&\ngh pr create --fill\nhttps://example.test/pr/1":
+                ("pr", "gh pr create --fill"),
+            "$ cat > body.md <<'EOF'\ngit push origin main\nEOF\ngh pr comment 1 --body-file body.md\ndone":
+                ("comment", "gh pr comment 1 --body-file body.md"),
+            "$ bash -lc 'set -e\ngit push origin main'\nEverything up-to-date": ("push", "git push origin main"),
+            "$ git status && \\\n  git push\noutput": ("push", "git status &&   git push"),
+        }
+        for text, (kind, statement) in cases.items():
+            with self.subTest(text=text):
+                step, found, effect = self.effect(text)
+                self.assertEqual((found, effect), (kind, statement))
+                self.assertNotIn("\n", step)
+
+    def test_output_ends_the_command(self):
+        for text in ("$ git diff\n--- a/run.sh\n+++ b/run.sh\n+git push origin main",
+                     "$ gh pr diff 1\n@@ -1 +1 @@\n git push origin main",
+                     "$ make check\nremote: ok\ngit push origin main",
+                     "$ cat > notes.md <<'EOF'\ngit push origin main\nEOF",
+                     "$ echo 'git push'\n[main 1234567] message\ngit push origin main",
+                     "$ cat notes.md\ngit push origin main is the last step.",
+                     "$ git push --dry-run\nTo example.test:repo.git\n git push origin main",
+                     "$ git push --dry-run\n git push origin main",
+                     "$ git status\ngit push origin main"):
+            with self.subTest(text=text):
+                self.assertEqual(self.effect(text)[1:], (None, None))
+        self.assertEqual(self.effect("$ git status\nprivate output")[0], "git status")
+
+    def test_tool_command_spans_lines(self):
+        value = {"type": "dynamic_tool", "text": json.dumps(
+            {"toolName": "exec_command", "input": {"cmd": "set -e\ngh pr merge 3 --squash"}})}
+        self.assertEqual(activity.describe(value), ("set -e", "merge", "gh pr merge 3 --squash"))
 
 
 class QuietTest(unittest.TestCase):
@@ -238,6 +303,11 @@ class QuietTest(unittest.TestCase):
         self.lanes[0]["status"] = "running"
         self.context.activity["lane"]["runStartedAt"] = None
         self.assertEqual(activity.attention(self.lanes, self.context), [])
+
+    def test_quiet_reason_names_unreadable_activity(self):
+        self.lanes[0]["activityError"] = {"error": "tool-error", "since": "2026-10-21T22:00:00Z"}
+        self.assertTrue(activity.attention(self.lanes, self.context)[0]["reason"].endswith(
+            "; activity could not be read"))
 
     def test_uses_later_side_effect_and_snapshot_flags(self):
         self.lanes[0]["lastSideEffect"] = {"at": "2026-10-21T20:30:00Z"}

@@ -2,7 +2,7 @@
 
 A round is a review round: 1 is the first review, and the fix round is round - 1.
 Rounds come from child thread titles and IDs that name a PR ("harness#447 round 2",
-"…-pr447-r2") and, when `gh` is available, from the ship-loop PR comment ledger,
+"…-pr447-r2"; a review title's short marker can be two digits, "QA #338 r10") and, when `gh` is available, from the ship-loop PR comment ledger,
 whose round wins. The source reads only ledgers; titles are read fresh in `apply`.
 Partial shape: {"owner/repo#number": {"round": int, "source": "ledger", "since": str|None}}.
 """
@@ -20,6 +20,7 @@ AUTH_SECONDS = 600
 QUALIFIED = re.compile(r"(?<![\w.-])(?:([\w.-]+)/)?([A-Za-z0-9][\w.-]*)#(\d+)(?!\d)")
 BARE = re.compile(r"(?<![\w#])#(\d+)(?!\d)|(?<![a-z0-9])pr[-#]?(\d+)(?!\d)", re.IGNORECASE)
 MARKERS = re.compile(r"(?<![a-z0-9])(?:(?:round|fix|recheck)[\s_-]*(\d{1,2})|r(\d))(?![0-9a-z])", re.IGNORECASE)   # "r" takes one digit: "R75" is a name
+REVIEW_SHORT = re.compile(r"(?<![A-Za-z0-9])r(\d{2})(?=$|[\s),;:/\]])")   # in a review title "r10" is round 10; "R75", "r75-host" are names
 REVIEW_ROLE = re.compile(r"(?<![a-z0-9])(?:qa|review\w*|judge)(?![a-z0-9])", re.IGNORECASE)
 
 
@@ -163,8 +164,12 @@ def from_threads(threads):
         names = named(text, tree_prs.get(roots[(thread["server"], thread["threadId"])], {}), all_prs)
         if not names:
             continue
-        marks = [int(word or short) for word, short in MARKERS.findall(text) if int(word or short) > 0]
-        round_ = max(marks) if marks else (1 if REVIEW_ROLE.search(thread.get("title") or "") else None)
+        title = thread.get("title") or ""
+        review = REVIEW_ROLE.search(title)
+        marks = [int(word or short) for word, short in MARKERS.findall(text)]
+        marks += [int(short) for short in REVIEW_SHORT.findall(title)] if review else []
+        marks = [mark for mark in marks if mark > 0]
+        round_ = max(marks) if marks else (1 if review else None)
         if round_ is None:
             continue
         for name in names:

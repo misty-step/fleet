@@ -3,8 +3,9 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from fleet import config, derive, hub, snapshot
+from fleet import config, derive, hub, rounds, snapshot
 from fleet.mcp import McpError
+from fleet.sources import t3
 from fleet.sources.t3 import T3
 
 NOW = datetime(2026, 10, 21, 23, 0, tzinfo=timezone.utc)
@@ -31,7 +32,11 @@ class FakeClients:
         self.pending = pending or {}      # threadId -> request IDs
         self.failing = set(failing)
         self.hanging = {}                 # server id -> Event its calls block on until set
+        self.broken = set()               # project names whose thread list fails
+        self.delay = 0                    # seconds each thread list call takes
         self.calls = []
+        self.lock = threading.Lock()
+        self.active = self.most = 0       # calls in flight now, and at most
 
     def ids(self):
         return list(self.servers)
@@ -47,6 +52,14 @@ class FakeClients:
             items, key = [{"id": "p-" + name, "title": name, "deletedAt": None} for name in projects], "projects"
         elif tool == "t3_thread_list":
             assert (arguments["settled"], arguments["includeSubagents"], arguments["limit"]) == (False, True, 100)
+            if arguments["projectId"][2:] in self.broken:
+                raise McpError("tool-error")
+            with self.lock:
+                self.active += 1
+                self.most = max(self.most, self.active)
+            time.sleep(self.delay)
+            with self.lock:
+                self.active -= 1
             items, key = projects[arguments["projectId"][2:]], "threads"
         elif tool == "t3_pending_request_list":
             return {"requestIds": self.pending.get(arguments["threadId"], [])}
@@ -55,8 +68,25 @@ class FakeClients:
         return {key: items[start:start + 2], "nextCursor": following}
 
 
-def collect(clients):
-    return T3(config.parse({}), clients, clock=lambda: NOW).collect(None)
+class FakeGh:
+    """GitHub PR states by number; `available` false stands for gh missing or logged out."""
+
+    def __init__(self, states=None, available=True):
+        self.states = states or {}
+        self.ok = available
+        self.calls = []
+
+    def available(self):
+        return self.ok
+
+    def api(self, path, *args):
+        self.calls.append(path)
+        return self.states[int(path.rsplit("/", 1)[1])] + "\n"
+
+
+def collect(clients, gh=None):
+    states = t3.PrStates(gh or FakeGh(available=False))
+    return T3(config.parse({}), clients, clock=lambda: NOW, states=states).collect(None)
 
 
 def thread(thread_id, status="running", parent=None, updated=1, server="alpha", **extra):
@@ -145,6 +175,73 @@ class SourceTest(unittest.TestCase):
         source.collect(None)
         partial = source.collect(None)
         self.assertEqual((partial["servers"][1]["ok"], partial["servers"][1]["threads"]), (True, 2))
+
+    def test_lists_projects_concurrently_with_bounded_workers(self):
+        clients = FakeClients({"alpha": {"p%d" % n: [raw_thread("t%d" % n)] for n in range(40)}})
+        clients.delay = 0.1   # one at a time this server takes 4 s
+        began = time.monotonic()
+        partial = collect(clients)
+        self.assertLess(time.monotonic() - began, 1.5)
+        self.assertEqual(clients.most, t3.WORKERS)
+        self.assertEqual([t["threadId"] for t in partial["threads"]], ["t%d" % n for n in range(40)])
+        self.assertEqual(partial["servers"][0]["threads"], 40)
+
+    def test_one_failing_project_fails_its_server(self):
+        clients = FakeClients({"alpha": {"a": [raw_thread("a1")], "b": [raw_thread("b1")]}, "beta": {"p": [raw_thread("c1")]}})
+        clients.broken.add("b")
+        alpha, beta = collect(clients)["servers"]
+        self.assertEqual((alpha["ok"], alpha["error"]), (False, "tool-error"))
+        self.assertEqual((beta["ok"], beta["threads"]), (True, 1))
+
+    def stateless(self, gh):
+        """Collect a thread linking PR 1 with no state and PR 2 open, twice, letting lookups finish between."""
+        linked = [{"repository": "o/r", "number": n, "url": "https://github.com/o/r/pull/%d" % n, "state": state}
+                  for n, state in ((1, None), (2, "open"))]
+        source = T3(config.parse({}), FakeClients({"alpha": {"p": [raw_thread("t1", pullRequests=linked)]}}),
+                    clock=lambda: NOW, states=t3.PrStates(gh))
+        first = source.collect(None)
+        worker = source.states.worker
+        if worker:
+            worker.join(5)
+        return first, source.collect(None)
+
+    def ledger_loops(self, threads):
+        """Loop alerts when PR 1's ledger says review round 5."""
+        ctx = derive.Context(threads=threads, roster=set(), now=NOW, thresholds=config.Thresholds(),
+                             rounds={"o/r#1": {"round": 5, "since": None}})
+        return rounds.attention(derive.lanes(ctx), ctx)
+
+    def test_stateless_pr_resolved_merged_stays_merged_and_raises_no_loop(self):
+        gh = FakeGh({1: "merged"})
+        first, second = self.stateless(gh)
+        self.assertEqual([pr["state"] for pr in first["threads"][0]["prs"]], [None, "open"])
+        self.assertEqual([pr["state"] for pr in second["threads"][0]["prs"]], ["merged", "open"])
+        self.assertEqual(gh.calls, ["repos/o/r/pulls/1"])
+        self.assertEqual([pr["number"] for pr in rounds.open_prs(second["threads"])], [2])
+        self.assertEqual(self.ledger_loops(second["threads"]), [])
+
+    def test_unresolved_stateless_pr_is_null_and_still_a_rounds_target(self):
+        first, second = self.stateless(FakeGh({1: "merged"}, available=False))
+        self.assertEqual([pr["state"] for pr in second["threads"][0]["prs"]], [None, "open"])
+        self.assertEqual([pr["number"] for pr in rounds.open_prs(second["threads"])], [1, 2])
+        self.assertEqual(self.ledger_loops(second["threads"]), [])
+
+    def test_state_lookups_repeat_only_after_a_few_minutes(self):
+        moment = [0.0]
+        gh = FakeGh({1: "merged"})
+        states = t3.PrStates(gh, clock=lambda: moment[0])
+        pr = {"repository": "o/r", "number": 1, "url": "u", "state": None}
+        states.state(pr)
+        states.worker.join(5)
+        moment[0] = t3.STATE_SECONDS - 1
+        self.assertEqual(states.state(pr), "merged")
+        self.assertIsNone(states.worker)
+        moment[0] = t3.STATE_SECONDS
+        gh.states[1] = "error"
+        self.assertEqual(states.state(pr), "merged")
+        states.worker.join(5)
+        self.assertEqual(states.state(pr), "merged")   # a bad reading keeps the last state
+        self.assertEqual(len(gh.calls), 2)
 
     def test_server_never_reached(self):
         partial = collect(FakeClients({"alpha": {}}, failing={"alpha"}))

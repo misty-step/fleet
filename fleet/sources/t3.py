@@ -7,24 +7,31 @@ A normalized thread is:
    "createdAt", "updatedAt", "prs": [{"repository", "number", "url", "state"}],
    "pendingQuestions": int}
 `pendingQuestions` is null when a waiting thread's questions could not be read.
+A linked PR that T3 reports without a state takes its GitHub state from `PrStates`, looked
+up off the collection path; until one is known its state is null.
 
 Each server is collected on its own; one failing marks only that server and keeps
 its last good threads. Each server has at most one request in flight, and a
 collection waits for it only until a deadline; the request carries on into later
 collections. Meanwhile the server shows its last result, or "slow" with its last
 good threads once the request has run past SLOW_SECONDS or if it never finished.
+Within one request, a server's projects are listed on up to WORKERS threads at once.
 """
 import threading
 import time
 from concurrent.futures import Future, wait
 from datetime import datetime, timezone
 
+from .. import rounds
 from ..hub import describe, iso
 
 PAGE = 100
 MAX_PAGES = 200
 MARGIN_SECONDS = 3
 SLOW_SECONDS = 30
+WORKERS = 8
+STATE_SECONDS = 300
+STATES = ("open", "merged", "closed")
 
 
 def utc_now():
@@ -42,10 +49,11 @@ def stamp(value):
 class T3:
     name = "t3"
 
-    def __init__(self, config, clients, clock=utc_now):
+    def __init__(self, config, clients, clock=utc_now, states=None):
         self.interval = config.interval_seconds
         self.clients = clients
         self.clock = clock
+        self.states = states or PrStates()
         self.deadline = config.interval_seconds + MARGIN_SECONDS   # None waits for every server
         self.slow_after = SLOW_SECONDS
         self.last = {}           # server id -> {"lastSeenAt", "threads"} from its last good collection
@@ -101,14 +109,15 @@ class T3:
                  "latencyMs": round((time.monotonic() - began) * 1000), "threads": len(threads)}, threads)
 
     def threads(self, server_id):
-        threads = []
-        for project in self.pages(server_id, "t3_project_list", {}, "projects"):
-            if project.get("deletedAt"):
-                continue
-            arguments = {"projectId": project["id"], "settled": False, "includeSubagents": True}
-            for raw in self.pages(server_id, "t3_thread_list", arguments, "threads"):
-                threads.append(self.normalize(server_id, project, raw))
-        return threads
+        projects = [project for project in self.pages(server_id, "t3_project_list", {}, "projects")
+                    if not project.get("deletedAt")]
+        return [thread for listed in fan_out(lambda project: self.project(server_id, project), projects)
+                for thread in listed]
+
+    def project(self, server_id, project):
+        arguments = {"projectId": project["id"], "settled": False, "includeSubagents": True}
+        return [self.normalize(server_id, project, raw)
+                for raw in self.pages(server_id, "t3_thread_list", arguments, "threads")]
 
     def pages(self, server_id, tool, arguments, key):
         """Every item of a cursor-paginated list tool."""
@@ -138,7 +147,7 @@ class T3:
             "latestRunId": raw.get("latestRunId"),
             "createdAt": stamp(raw.get("createdAt")),
             "updatedAt": stamp(raw.get("updatedAt")),
-            "prs": prs(raw),
+            "prs": prs(raw, self.states.state),
             "pendingQuestions": self.questions(server_id, raw) if raw.get("status") == "waiting" else 0,
         }
 
@@ -150,8 +159,93 @@ class T3:
         return len(result.get("requestIds") or [])
 
 
-def prs(raw):
-    """Every linked pull request, including the legacy single link, once each."""
+def fan_out(function, items, workers=WORKERS):
+    """[function(item) for item in items] on up to `workers` daemon threads, in order; raises the first error.
+
+    Daemon threads, as in T3.start, so a hung call never holds up exit.
+    """
+    results, errors = [None] * len(items), []
+    pending = iter(enumerate(items))
+    lock = threading.Lock()
+
+    def work():
+        while True:
+            with lock:
+                index, item = next(pending, (None, None))
+                if index is None or errors:
+                    return
+            try:
+                results[index] = function(item)
+            except Exception as error:
+                with lock:
+                    errors.append(error)
+                return
+
+    threads = [threading.Thread(target=work, name="t3-project", daemon=True) for _ in range(min(workers, len(items)))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise errors[0]
+    return results
+
+
+class PrStates:
+    """GitHub states for linked PRs that T3 reports without one.
+
+    `state(pr)` never waits: it returns the last state read, or None, and queues a lookup
+    when none was tried in the last STATE_SECONDS. One daemon thread reads the queue with
+    `gh`, only while gh is installed and logged in. A failed lookup keeps the last state.
+    """
+
+    def __init__(self, gh=None, clock=time.monotonic):
+        self.gh = gh or rounds.Gh()
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.cache = {}     # PR key -> (monotonic time of its last lookup, state | None)
+        self.queued = {}    # PR key -> PR awaiting a lookup
+        self.worker = None
+
+    def state(self, pr):
+        name = rounds.key(pr)
+        with self.lock:
+            at, known = self.cache.get(name, (None, None))
+            if (at is None or self.clock() - at >= STATE_SECONDS) and name not in self.queued:
+                self.queued[name] = pr
+                if self.worker is None:
+                    self.worker = threading.Thread(target=self.work, name="t3-pr-states", daemon=True)
+                    self.worker.start()
+            return known
+
+    def work(self):
+        while True:
+            with self.lock:
+                if not self.queued:
+                    self.worker = None
+                    return
+                name, pr = next(iter(self.queued.items()))
+            found = self.lookup(pr)
+            with self.lock:
+                self.cache[name] = (self.clock(), found or self.cache.get(name, (None, None))[1])
+                del self.queued[name]
+
+    def lookup(self, pr):
+        try:
+            if not pr.get("repository") or not self.gh.available():
+                return None
+            found = self.gh.api("repos/%s/pulls/%d" % (pr["repository"], int(pr["number"])),
+                                "--jq", 'if .merged_at then "merged" else .state end').strip()
+        except (rounds.LedgerUnreadable, ValueError, TypeError):
+            return None
+        return found if found in STATES else None
+
+
+def prs(raw, resolve=lambda pr: None):
+    """Every linked pull request, including the legacy single link, once each.
+
+    A PR without a state takes `resolve(pr)`, which may be None.
+    """
     linked = list(raw.get("pullRequests") or [])
     if raw.get("linkedPullRequest"):
         linked.append(raw["linkedPullRequest"])
@@ -161,5 +255,5 @@ def prs(raw):
             continue
         seen.add(pr["url"])
         result.append({"repository": pr.get("repository"), "number": pr.get("number"),
-                       "url": pr["url"], "state": pr.get("state")})
+                       "url": pr["url"], "state": pr.get("state") or resolve(pr)})
     return result

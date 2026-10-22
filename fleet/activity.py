@@ -45,20 +45,25 @@ def summary(text, limit):
 
 HEREDOC = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 STATEMENT = re.compile(r"[\w.~/$][\w.+~/=$-]*$|\[\[?$|\]\]?$|[(){}!#]")   # how a statement's first word can start
+SETUP = {"set", "export", "cd", "source", "."}
+JOINS = {"&&", "||", "|"}
 
 
-def command_lines(text):
+def command_lines(text, script=False):
     """Shell statements from a command's text, one per logical line, input only.
 
     A timeline command is "$ " and the command, then its output, with no marker
     between them. Statements continue across lines inside quotes, after a trailing
-    backslash and through heredoc bodies; the first later line that cannot start a
-    shell statement (diff, log or tool output) begins the output and ends the
-    command. Output whose first lines read as commands can still be taken for input.
-    A `bash -c` script's own lines become statements too.
+    backslash and through heredoc bodies. A later line is read as a statement only
+    after shell setup (set, export, cd, source, comments), a trailing &&, || or |,
+    or a heredoc, and only if it can start a statement; otherwise it begins the
+    output. So a side effect after any other statement on its own line is missed,
+    and output after setup or a heredoc that reads as a command can still be taken
+    for input. A `bash -c` script, or a `script` (tool input), has no output, so
+    every line is a statement.
     """
     lines = (text or "").removeprefix("$ ").splitlines()
-    statements, index = [], 0
+    statements, index, follows = [], 0, True
     while index < len(lines):
         statement, index = lines[index], index + 1
         while True:
@@ -74,9 +79,12 @@ def command_lines(text):
                 words = None
             break
         stripped = statement.strip()
-        if statements and stripped and not STATEMENT.match(stripped.split(None, 1)[0]):
+        if not stripped:
+            continue
+        if statements and not (follows and STATEMENT.match(stripped.split(None, 1)[0])):
             break
-        for _, delimiter in HEREDOC.findall(statement):
+        heredocs = HEREDOC.findall(statement)
+        for _, delimiter in heredocs:
             if delimiter in (line.strip() for line in statement.splitlines()[1:]):
                 continue   # the body was inside the quoted statement
             while index < len(lines) and lines[index].strip() != delimiter:
@@ -84,41 +92,56 @@ def command_lines(text):
             index += 1
         if (words and len(words) >= 3 and words[0].rsplit("/", 1)[-1] in {"bash", "sh", "zsh"}
                 and words[1] in {"-c", "-lc", "-ic"}):
-            statements.extend(command_lines(words[2]))
-        elif stripped:
+            statements.extend(command_lines(words[2], script=True))
+        else:
             statements.append(stripped)
+        parts = tokens(statement)
+        follows = script or bool(heredocs) or parts is not None and (
+            bool(parts) and parts[-1] in JOINS or all(words[0] in SETUP for words in segments(parts)))
     return statements
 
 
-def command_text(text):
+def command_text(text, script=False):
     """The command's first statement; its output is never read."""
-    statements = command_lines(text)
+    statements = command_lines(text, script)
     return statements[0] if statements else ""
 
 
-def command_effect(text):
+def command_effect(text, script=False):
     """(kind, statement) of the command's first side effect, or (None, None)."""
-    for statement in command_lines(text):
+    for statement in command_lines(text, script):
         kind = command_kind(statement)
         if kind:
             return kind, statement
     return None, None
 
 
-def command_kind(command):
+def tokens(command):
+    """Shell words and ;&|() operators of a statement, without comments, or None if unparsable."""
     try:
-        tokens = list(shlex.shlex(command, posix=True, punctuation_chars=";&|()"))
+        return list(shlex.shlex(command, posix=True, punctuation_chars=";&|()"))
     except ValueError:
         return None
-    segments, segment = [], []
-    for token in tokens + [";"]:
+
+
+def segments(parts):
+    """The word lists between a statement's operators."""
+    result, segment = [], []
+    for token in parts + [";"]:
         if token and all(c in ";&|()" for c in token):
             if segment:
-                segments.append(segment)
+                result.append(segment)
             segment = []
         else:
             segment.append(token)
-    for words in segments:
+    return result
+
+
+def command_kind(command):
+    parts = tokens(command)
+    if parts is None:
+        return None
+    for words in segments(parts):
         while words and ("=" in words[0] or words[0] in {"env", "sudo", "npx", "bunx"}):
             words = words[1:]
         if not words:
@@ -175,7 +198,7 @@ def describe(item):
         inputs = {}
     command = inputs.get("cmd") or inputs.get("command")
     if isinstance(command, str):
-        return (command_text(command),) + command_effect(command)
+        return (command_text(command, True),) + command_effect(command, True)
     target = next((inputs[key] for key in ("threadId", "url", "repository", "path", "file_path")
                    if isinstance(inputs.get(key), str)), "")
     tool = re.split(r"[./]", name)[-1].removeprefix("mcp__github__")

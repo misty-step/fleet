@@ -241,7 +241,7 @@ class CommandTest(unittest.TestCase):
     def test_side_effect_on_a_later_line(self):
         cases = {
             "$ set -e\ngit push origin main\nTo example.test:repo.git": ("push", "git push origin main"),
-            "$ cd /repo\ngit add .\ngit commit -m \"title\n\nbody\"\ngh pr create --fill\nhttps://example.test/pr/1":
+            "$ cd /repo\ngit add . &&\ngit commit -m \"title\n\nbody\" &&\ngh pr create --fill\nhttps://example.test/pr/1":
                 ("pr", "gh pr create --fill"),
             "$ cat > body.md <<'EOF'\ngit push origin main\nEOF\ngh pr comment 1 --body-file body.md\ndone":
                 ("comment", "gh pr comment 1 --body-file body.md"),
@@ -259,7 +259,11 @@ class CommandTest(unittest.TestCase):
                      "$ gh pr diff 1\n@@ -1 +1 @@\n git push origin main",
                      "$ make check\nremote: ok\ngit push origin main",
                      "$ cat > notes.md <<'EOF'\ngit push origin main\nEOF",
-                     "$ echo 'git push'\n[main 1234567] message\ngit push origin main"):
+                     "$ echo 'git push'\n[main 1234567] message\ngit push origin main",
+                     "$ cat notes.md\ngit push origin main is the last step.",
+                     "$ git push --dry-run\nTo example.test:repo.git\n git push origin main",
+                     "$ git push --dry-run\n git push origin main",
+                     "$ git status\ngit push origin main"):
             with self.subTest(text=text):
                 self.assertEqual(self.effect(text)[1:], (None, None))
         self.assertEqual(self.effect("$ git status\nprivate output")[0], "git status")

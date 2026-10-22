@@ -68,12 +68,14 @@ function renderHeader(s) {
 
 function renderStats(s) {
   const n = s.summary;
+  const offPace = s.accounts.filter((a) => a.pace === "too_fast" || a.pace === "too_slow").length;
   const tiles = [
-    ["Lanes", n.lanes, ""], ["Running", n.running, ""],
-    ["Review loops", n.loops, n.loops ? "bad" : ""], ["Waiting", n.waiting, n.waiting ? "warn" : ""],
-    ["Stalled", n.stalled, n.stalled ? "bad" : ""], ["To tidy", n.tidy, n.tidy ? "warn" : ""],
+    ["Lanes", n.lanes, "", "h-lanes"], ["Running", n.running, "", "h-lanes"],
+    ["Review loops", n.loops, n.loops ? "bad" : "", "h-attention"], ["Waiting", n.waiting, n.waiting ? "warn" : "", "h-attention"],
+    ["Stalled", n.stalled, n.stalled ? "bad" : "", "h-attention"], ["To tidy", n.tidy, n.tidy ? "warn" : "", "h-tidy"],
+    ["Accounts off pace", offPace, offPace ? "warn" : "", "h-accounts"],
   ];
-  setHTML("stats", tiles.map(([l, v, tone]) => `<div class="stat ${tone}"><div class="n">${v}</div><div class="l">${l}</div></div>`).join(""));
+  setHTML("stats", tiles.map(([l, v, tone, target]) => `<a class="stat ${tone}" href="#${target}"><div class="n">${v}</div><div class="l">${l}</div></a>`).join(""));
 }
 
 function renderAttention(s) {
@@ -97,13 +99,19 @@ function sideEffect(e) {
   return `<span class="nowrap">${esc(ago(e.at))}</span><div class="sub mono" title="${esc(e.summary)}">${esc(e.kind)}</div>`;
 }
 
+// Open PRs carry the signal; merged and closed ones collapse to a count so busy lanes stay one glance tall.
 function prs(list) {
   if (!list.length) return `<span class="sub">—</span>`;
-  return list.map((p) => {
+  const open = list.filter((p) => p.state !== "merged" && p.state !== "closed");
+  const merged = list.filter((p) => p.state === "merged").length;
+  const closed = list.length - open.length - merged;
+  const badges = open.map((p) => {
     const round = p.round == null ? "" : ` · r${p.round}`;
-    const tone = p.state === "open" && p.round != null && p.round - 1 >= (snapshot.thresholds.loopRound || 2) ? "bad" : p.state === "merged" ? "ok" : "";
-    return `<a class="badge ${tone}" href="${esc(p.url)}" title="${esc(p.repository)} ${esc(p.state)}">#${p.number}${round}</a>`;
+    const tone = p.round != null && p.round - 1 >= (snapshot.thresholds.loopRound || 2) ? "bad" : "";
+    return `<a class="badge ${tone}" href="${esc(p.url)}" title="${esc(p.repository)} ${esc(p.state || "state unknown")}">#${p.number}${round}</a>`;
   }).join(" ");
+  const rest = [merged ? `${merged} merged` : "", closed ? `${closed} closed` : ""].filter(Boolean).join(" · ");
+  return `${badges}${rest ? `<div class="sub">${rest}</div>` : ""}`;
 }
 
 function renderLanes(s) {
@@ -116,19 +124,33 @@ function renderLanes(s) {
       <td><div class="title">${threadLink(l.threadId, l.title)}${l.roster ? ` <span class="badge" title="In the harness lane roster">roster</span>` : ""}</div>
         <div class="sub">${esc(l.server)} · ${esc(l.project)} · ${esc(l.account)} · ${esc(l.model)}</div></td>
       <td>${state(l.status)}${flags ? `<div>${flags}</div>` : ""}</td>
-      <td class="hide-s">${l.currentStep ? esc(l.currentStep) : `<span class="sub">—</span>`}<div class="sub">updated ${esc(ago(l.updatedAt))}</div></td>
+      <td class="hide-s">${l.currentStep ? `<div class="clamp" title="${esc(l.currentStep)}">${esc(l.currentStep)}</div>` : `<span class="sub">—</span>`}<div class="sub">updated ${esc(ago(l.updatedAt))}</div></td>
       <td>${sideEffect(l.lastSideEffect)}</td>
       <td class="nowrap">${kids}</td>
       <td>${prs(l.prs)}</td>
     </tr>`;
   }).join("");
-  setHTML("lanes", `<table><thead><tr><th>Lane</th><th>State</th><th class="hide-s">Current step</th><th>Last side effect</th><th>Children</th><th>PRs · round</th></tr></thead><tbody>${rows}</tbody></table>`);
+  setHTML("lanes", `<table><thead><tr><th class="lane-col">Lane</th><th>State</th><th class="hide-s">Current step</th><th>Last side effect</th><th>Children</th><th>PRs · round</th></tr></thead><tbody>${rows}</tbody></table>`);
+}
+
+// Needs tidying can hold a hundred rows; show a few so the account room stays in view.
+const TIDY_LIMIT = 8;
+let showAllTidy = false;
+let bulkRunning = false;
+
+function bulkTargets(s) {
+  return s.tidy.filter((t) => (t.status === "completed" || t.status === "cancelled") && t.actions.includes("settle")
+    && !pending.has(`${t.server}|${t.threadId}`));
 }
 
 function renderTidy(s) {
   $("c-tidy").textContent = s.tidy.length || "";
+  const targets = bulkTargets(s);
+  setHTML("tidy-bulk", targets.length > 1
+    ? `<button class="btn" data-bulk="settle"${bulkRunning ? " disabled" : ""}>Settle all ${targets.length} completed</button>` : "");
   if (!s.tidy.length) return setHTML("tidy", `<div class="empty">Nothing to tidy.</div>`);
-  const rows = s.tidy.map((t) => {
+  const shown = showAllTidy ? s.tidy : s.tidy.slice(0, TIDY_LIMIT);
+  const rows = shown.map((t) => {
     const key = `${t.server}|${t.threadId}`;
     const busy = pending.has(key) ? " disabled" : "";
     const buttons = t.actions.map((a) => `<button class="btn" data-action="${a}" data-server="${esc(t.server)}" data-thread="${esc(t.threadId)}"${busy}>${a === "settle" ? "Settle" : "Nudge"}</button>`).join("");
@@ -139,7 +161,39 @@ function renderTidy(s) {
       <td class="right">${buttons}</td>
     </tr>`;
   }).join("");
-  setHTML("tidy", `<table><tbody>${rows}</tbody></table>`);
+  const more = s.tidy.length > TIDY_LIMIT
+    ? `<tr class="more"><td colspan="3"><button class="link" data-toggle="tidy">${showAllTidy ? "Show fewer" : `Show all ${s.tidy.length}`}</button></td></tr>` : "";
+  setHTML("tidy", `<table><tbody>${rows}${more}</tbody></table>`);
+}
+
+async function post(action, server, thread) {
+  try {
+    const response = await fetch(`api/actions/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Fleet-Action": "1" },
+      body: JSON.stringify({ server, threadId: thread }),
+    });
+    return await response.json().catch(() => ({ ok: false, error: `http-${response.status}` }));
+  } catch (error) {
+    return { ok: false, error: "network error" };
+  }
+}
+
+async function settleAll() {
+  const targets = bulkTargets(snapshot);
+  bulkRunning = true;
+  let done = 0;
+  let failed = 0;
+  for (const t of targets) {
+    const key = `${t.server}|${t.threadId}`;
+    pending.add(key);
+    render();
+    const result = await post("settle", t.server, t.threadId);
+    pending.delete(key);
+    result.ok ? done++ : failed++;
+    toast(`Settled ${done} of ${targets.length}${failed ? ` · ${failed} failed` : ""}`, failed > 0);
+  }
+  bulkRunning = false;
+  render();
 }
 
 const PACE = { on_pace: ["ok", "On pace"], too_fast: ["bad", "Too fast"], too_slow: ["warn", "Too slow"], unknown: ["", "Unknown"] };
@@ -151,6 +205,10 @@ function paceDetail(a) {
     const hours = Math.max(0, (ms(a.resetsAt) - Date.now()) / 3600000);
     const left = Math.max(0, a.roomPercent - a.burnPerHour * hours);
     return `about ${Math.round(left)}% will go unused`;
+  }
+  if (a.pace === "too_slow" && a.roomPercent != null && a.resetsAt) {
+    const target = Math.max(0, (ms(a.resetsAt) - Date.now()) / WEEK_MS * 100);
+    return `approximate, no burn reading: ${Math.round(a.roomPercent)}% left, about ${Math.round(target)}% on pace`;
   }
   if (a.burnPerHour != null && a.sustainablePerHour != null) return `${a.burnPerHour.toFixed(2)} vs ${a.sustainablePerHour.toFixed(2)} pts/h`;
   return a.state === "unknown" ? "no current reading" : esc(a.state);
@@ -225,25 +283,24 @@ function toast(text, bad) {
 }
 
 document.addEventListener("click", async (e) => {
+  if (e.target.closest("button[data-toggle=tidy]")) {
+    showAllTidy = !showAllTidy;
+    return renderTidy(snapshot);
+  }
+  if (e.target.closest("button[data-bulk=settle]")) {
+    if (!bulkRunning) await settleAll();
+    return;
+  }
   const button = e.target.closest("button[data-action]");
   if (!button) return;
   const { action, server, thread } = button.dataset;
   const key = `${server}|${thread}`;
   pending.add(key);
   button.disabled = true;
-  try {
-    const response = await fetch(`api/actions/${action}`, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Fleet-Action": "1" },
-      body: JSON.stringify({ server, threadId: thread }),
-    });
-    const result = await response.json().catch(() => ({ ok: false, error: `http-${response.status}` }));
-    toast(result.ok ? (action === "settle" ? "Settled" : "Nudge sent") : `Could not ${action}: ${result.error}`, !result.ok);
-  } catch (error) {
-    toast(`Could not ${action}: network error`, true);
-  } finally {
-    pending.delete(key);
-    render();
-  }
+  const result = await post(action, server, thread);
+  toast(result.ok ? (action === "settle" ? "Settled" : "Nudge sent") : `Could not ${action}: ${result.error}`, !result.ok);
+  pending.delete(key);
+  render();
 });
 
 fetch("api/snapshot").then((r) => r.json()).then(accept).catch(() => {});

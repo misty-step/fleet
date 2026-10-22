@@ -66,7 +66,9 @@ Thresholds are configuration; these are the defaults.
 Pace for an account window: `burn` is Upkeep's measured percentage points per
 hour; `sustainable` is room left divided by hours to reset. On pace when burn is
 within 25% of sustainable; too fast above that; too slow (room will be wasted)
-below it. Unknown when Upkeep has no current reading.
+below it. Without a burn reading but with room and reset known, Too slow is
+approximate: room is over 1.5 times the on-pace target (hours to reset / 168) and over
+20 points above it. Otherwise Unknown when Upkeep has no current reading.
 
 ## Architecture
 

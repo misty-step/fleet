@@ -84,7 +84,11 @@ class FixedHub:
         return self.version, self.encoded
 
 
+class SourceError(Exception):
+    """A source failure whose message is one of our own short codes, never a header or body."""
+
+
 def describe(error):
     """A short, loggable description: our own codes, otherwise only the class."""
     from .mcp import McpError
-    return str(error)[:60] if isinstance(error, McpError) else type(error).__name__
+    return str(error)[:60] if isinstance(error, (McpError, SourceError)) else type(error).__name__

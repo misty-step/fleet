@@ -61,7 +61,7 @@ Times are ISO 8601 UTC strings. Missing values are `null`, never omitted.
       "repository": "misty-step/harness",
       "number": 447,
       "url": "https://github.com/misty-step/harness/pull/447",
-      "state": "open | merged | closed",
+      "state": "open | merged | closed", // null when neither T3 nor GitHub gave one
       "round": 2                       // review round (1 = first review; fix round = round - 1); null when unknown
     }],
     "account": "claude-mistystep",     // T3 provider instance id

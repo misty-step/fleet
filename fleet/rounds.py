@@ -129,10 +129,11 @@ class Rounds:
 
 
 def open_prs(threads):
+    """PRs whose ledger may still change: open ones, and ones whose state is unknown."""
     seen = {}
     for thread in threads:
         for pr in thread.get("prs") or []:
-            if pr.get("state") == "open":
+            if pr.get("state") in ("open", None):
                 seen.setdefault(key(pr), pr)
     return list(seen.values())
 

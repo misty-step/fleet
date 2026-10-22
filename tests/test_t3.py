@@ -68,8 +68,25 @@ class FakeClients:
         return {key: items[start:start + 2], "nextCursor": following}
 
 
-def collect(clients):
-    return T3(config.parse({}), clients, clock=lambda: NOW).collect(None)
+class FakeGh:
+    """GitHub PR states by number; `available` false stands for gh missing or logged out."""
+
+    def __init__(self, states=None, available=True):
+        self.states = states or {}
+        self.ok = available
+        self.calls = []
+
+    def available(self):
+        return self.ok
+
+    def api(self, path, *args):
+        self.calls.append(path)
+        return self.states[int(path.rsplit("/", 1)[1])] + "\n"
+
+
+def collect(clients, gh=None):
+    states = t3.PrStates(gh or FakeGh(available=False))
+    return T3(config.parse({}), clients, clock=lambda: NOW, states=states).collect(None)
 
 
 def thread(thread_id, status="running", parent=None, updated=1, server="alpha", **extra):
@@ -176,12 +193,55 @@ class SourceTest(unittest.TestCase):
         self.assertEqual((alpha["ok"], alpha["error"]), (False, "tool-error"))
         self.assertEqual((beta["ok"], beta["threads"]), (True, 1))
 
-    def test_pr_without_a_state_counts_as_open(self):
+    def stateless(self, gh):
+        """Collect a thread linking PR 1 with no state and PR 2 open, twice, letting lookups finish between."""
         linked = [{"repository": "o/r", "number": n, "url": "https://github.com/o/r/pull/%d" % n, "state": state}
-                  for n, state in ((1, None), (2, "merged"), (3, "closed"), (4, "open"))]
-        partial = collect(FakeClients({"alpha": {"p": [raw_thread("t1", pullRequests=linked)]}}))
-        self.assertEqual([pr["state"] for pr in partial["threads"][0]["prs"]], ["open", "merged", "closed", "open"])
-        self.assertEqual([pr["number"] for pr in rounds.open_prs(partial["threads"])], [1, 4])
+                  for n, state in ((1, None), (2, "open"))]
+        source = T3(config.parse({}), FakeClients({"alpha": {"p": [raw_thread("t1", pullRequests=linked)]}}),
+                    clock=lambda: NOW, states=t3.PrStates(gh))
+        first = source.collect(None)
+        worker = source.states.worker
+        if worker:
+            worker.join(5)
+        return first, source.collect(None)
+
+    def ledger_loops(self, threads):
+        """Loop alerts when PR 1's ledger says review round 5."""
+        ctx = derive.Context(threads=threads, roster=set(), now=NOW, thresholds=config.Thresholds(),
+                             rounds={"o/r#1": {"round": 5, "since": None}})
+        return rounds.attention(derive.lanes(ctx), ctx)
+
+    def test_stateless_pr_resolved_merged_stays_merged_and_raises_no_loop(self):
+        gh = FakeGh({1: "merged"})
+        first, second = self.stateless(gh)
+        self.assertEqual([pr["state"] for pr in first["threads"][0]["prs"]], [None, "open"])
+        self.assertEqual([pr["state"] for pr in second["threads"][0]["prs"]], ["merged", "open"])
+        self.assertEqual(gh.calls, ["repos/o/r/pulls/1"])
+        self.assertEqual([pr["number"] for pr in rounds.open_prs(second["threads"])], [2])
+        self.assertEqual(self.ledger_loops(second["threads"]), [])
+
+    def test_unresolved_stateless_pr_is_null_and_still_a_rounds_target(self):
+        first, second = self.stateless(FakeGh({1: "merged"}, available=False))
+        self.assertEqual([pr["state"] for pr in second["threads"][0]["prs"]], [None, "open"])
+        self.assertEqual([pr["number"] for pr in rounds.open_prs(second["threads"])], [1, 2])
+        self.assertEqual(self.ledger_loops(second["threads"]), [])
+
+    def test_state_lookups_repeat_only_after_a_few_minutes(self):
+        moment = [0.0]
+        gh = FakeGh({1: "merged"})
+        states = t3.PrStates(gh, clock=lambda: moment[0])
+        pr = {"repository": "o/r", "number": 1, "url": "u", "state": None}
+        states.state(pr)
+        states.worker.join(5)
+        moment[0] = t3.STATE_SECONDS - 1
+        self.assertEqual(states.state(pr), "merged")
+        self.assertIsNone(states.worker)
+        moment[0] = t3.STATE_SECONDS
+        gh.states[1] = "error"
+        self.assertEqual(states.state(pr), "merged")
+        states.worker.join(5)
+        self.assertEqual(states.state(pr), "merged")   # a bad reading keeps the last state
+        self.assertEqual(len(gh.calls), 2)
 
     def test_server_never_reached(self):
         partial = collect(FakeClients({"alpha": {}}, failing={"alpha"}))

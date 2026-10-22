@@ -35,3 +35,7 @@ python3 -m fleet serve --fixture fixtures/snapshot.json --port 8797   # page at 
 ```
 
 Verify user-facing changes with [verify-fleet](.agents/skills/verify-fleet/SKILL.md).
+
+## No fallbacks
+
+No fallbacks, backup paths or masking safety nets. Write the one best solution: direct, clean, simple, elegant. If it fails, it must fail loudly and visibly so we can fix it. Security checks (auth, signatures, schema validation) stay, but fail loudly, never silently.

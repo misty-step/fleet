@@ -73,7 +73,7 @@ approximate: room is over 1.5 times the on-pace target (hours to reset / 168) an
 ## Architecture
 
 ```
-T3 servers (mirrodin, serenity, cloud-home-agents, exe-worker-1)
+T3 servers (mirrodin, serenity, cloud-home-agents)
    │  HTTP MCP over the tailnet, bearer token per server
    ▼
 collector sources (fleet/sources/*) ──► assemble (fleet/snapshot.py) ──► hub

@@ -24,7 +24,7 @@ def project_room(status):
         instances = account.get('instances', {})
         if not isinstance(instances, dict) or any(not isinstance(value, str) for value in instances.values()):
             raise SourceError('accounts-invalid-account')
-        current = quota.get('state') == 'current'
+        measured = quota.get('state') in {'current', 'partial'}
         allowances = []
         for key, label in [('five_hour', '5h'), ('weekly', 'weekly')]:
             window = quota.get(key)
@@ -32,16 +32,16 @@ def project_room(status):
                 raise SourceError('accounts-invalid-account')
             allowances.append({
                 'active': True, 'label': label,
-                'room_percent': window.get('room_percent') if current else None,
-                'resets_at': window.get('resets_at') if current else None,
+                'room_percent': window.get('room_percent') if measured else None,
+                'resets_at': window.get('resets_at') if measured else None,
                 'observed_at': quota.get('observed_at'), 'age_s': quota.get('age_s'),
-                'pace': window.get('pace') if current else None,
+                'pace': window.get('pace') if measured else None,
             })
         accounts.append({
             'instance_id': account.get('instance_id'),
             'instances': instances,
             'name': f'{provider} · {email or "email unknown"}', 'provider': provider,
-            'state': 'current' if current else 'unknown',
+            'state': quota['state'] if measured else 'unknown',
             'room_percent': None, 'resets_at': None,
             'observed_at': quota.get('observed_at'), 'age_s': quota.get('age_s'),
             'evaluated_at': status.get('evaluated_at'),

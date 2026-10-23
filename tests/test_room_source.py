@@ -28,13 +28,35 @@ class RoomSourceTest(unittest.TestCase):
 
     def test_command_result_reaches_fleet_with_canonical_identity(self):
         rows = self.collect(ROOM)
-        context = derive.Context([{'account': 'codex-team', 'status': 'running'},
-                                  {'account': 'codex', 'status': 'running'}], set(), NOW, config.Thresholds())
+        context = derive.Context([{'server': 'authority', 'account': 'codex-team', 'status': 'running'},
+                                  {'server': 'reader', 'account': 'codex', 'status': 'running'}], set(), NOW, config.Thresholds())
         row = derive.accounts(rows, context)[0]
         self.assertEqual(row['id'], 'codex-team')
         self.assertEqual(row['name'], 'codex · qa@example.test')
         self.assertEqual(row['roomPercent'], 48)
         self.assertEqual(row['running'], 2)
+
+    def test_host_local_alias_does_not_count_for_another_account(self):
+        value = json.loads(json.dumps(ROOM))
+        other = json.loads(json.dumps(value['accounts'][0]))
+        other.update(email='other@example.test', instance_id='other-account',
+                     instances={'authority': 'codex', 'reader': 'other-account'})
+        value['accounts'].append(other)
+        rows = self.collect(value)
+        threads = [{'server': 'authority', 'account': 'codex', 'status': 'running'},
+                   {'server': 'unconfigured', 'account': 'codex', 'status': 'running'},
+                   {'account': 'codex', 'status': 'running'}]
+        result = derive.accounts(rows, derive.Context(threads, set(), NOW, config.Thresholds()))
+        self.assertEqual([row['running'] for row in result], [0, 1])
+
+    def test_partial_quota_preserves_known_weekly_window(self):
+        value = json.loads(json.dumps(ROOM))
+        quota = value['accounts'][0]['quota']
+        quota.update(state='partial', five_hour={'room_percent': None, 'resets_at': None})
+        rows = self.collect(value)
+        self.assertIsNone(rows[0]['allowances'][0]['room_percent'])
+        row = derive.accounts(rows, derive.Context([], set(), NOW, config.Thresholds()))[0]
+        self.assertEqual((row['state'], row['roomPercent'], row['resetsAt']), ('partial', 48, RESET))
 
     def test_unknown_quota_and_working_probe_do_not_invent_percent(self):
         value = json.loads(json.dumps(ROOM))

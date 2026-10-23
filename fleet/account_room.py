@@ -76,12 +76,14 @@ def project(raw, context):
         if burn is not None and sustainable is not None and burn > sustainable and measured.get("outlasts_reset") is not True:
             runs_out = moment(measured.get("runs_out_at"))
         identifier = account.get("instance_id") or account.get("name")
-        aliases = {identifier, *account.get('instances', {}).values()}
+        instances = account.get("instances", {})
         result.append({
             "id": identifier, "name": account.get("name"), "provider": account.get("provider"),
             "state": state, "roomPercent": room, "resetsAt": iso(reset), "pace": pace,
             "burnPerHour": burn, "sustainablePerHour": sustainable, "runsOutAt": iso(runs_out),
-            "running": sum(thread.get("account") in aliases and thread.get("status") in
-                           ACTIVE for thread in context.threads),
+            "running": sum(thread.get("account") is not None and thread.get("status") in ACTIVE
+                           and thread.get("account") == (instances.get(thread.get("server"))
+                                                        if instances else identifier)
+                           for thread in context.threads),
         })
     return result

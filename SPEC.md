@@ -89,8 +89,9 @@ harness roster (wipRoots) ─┘                         SSE + JSON ◄───
   `t3_thread_read`, `t3_pending_request_list`). Never the state database.
 - **Writes go through T3's own MCP** (`t3_thread_update` to settle,
   `t3_thread_send` to nudge). Never the state database.
-- **Account room comes from Upkeep's** published `status.json`, which already
-  carries per-account room, reset and burn.
+- **Account room comes from Upkeep's** `room --json` command, which supplies
+  canonical account names, fresh room and reset observations. Unknown or expired
+  observations show no current percentage. Probe success does not imply numeric room.
 - **Remote-first.** The collector needs only network reach to each MCP endpoint
   and Upkeep, so it can run on mirrodin or a cloud VM. Configuration lives
   outside the repository; tokens arrive as environment variables from `pass`.

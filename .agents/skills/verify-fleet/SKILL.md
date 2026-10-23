@@ -45,7 +45,11 @@ packaging/fleet-run   # or: pass-env run $(python3 -m fleet pass-env-args) -- py
 ```
 
 `fleet snapshot` must show every configured server `ok: true` and source health
-`ok`. Compare two or three lanes against T3 (`t3_thread_list`) by hand.
+`ok`. Compare the Account room rows with the same host’s
+`upkeep room --json`: canonical provider/email names and T3 instance IDs agree,
+missing weekly room stays unknown even when five-hour room exists, and an expired
+observation never shows a current percentage. The private configuration uses
+`upkeep_room_command`, an argument array, instead of the retired status URL. Compare two or three lanes against T3 (`t3_thread_list`) by hand.
 
 ## 4. Live deployment
 

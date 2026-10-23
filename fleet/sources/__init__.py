@@ -13,5 +13,5 @@ from .t3 import T3
 def build(config, clients=None):
     """Every source this configuration enables."""
     clients = clients or Clients(config.servers)
-    return [Roster(config.roster), T3(config, clients), Accounts(config.upkeep_status_url),
+    return [Roster(config.roster), T3(config, clients), Accounts(config.upkeep_room_command),
             activity.Activity(config, clients), rounds.Rounds(config, clients)]

@@ -6,8 +6,8 @@ base_path = "/fleet"
 interval_seconds = 5
 # Harness lane roster (wipRoots): a local t3-pool.json path or an https URL.
 roster = "~/.config/t3-pool.json"
-# Upkeep's published status (per-account room, reset and burn).
-upkeep_status_url = "https://upkeep.example.ts.net/upkeep/status.json"
+# Upkeep's canonical live account room. Arguments execute directly, without a shell.
+upkeep_room_command = ["upkeep", "room", "--json"]
 
 [[servers]]
 id = "alpha"

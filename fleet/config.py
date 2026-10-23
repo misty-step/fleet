@@ -40,7 +40,7 @@ class Config:
     base_path: str = "/fleet"
     interval_seconds: float = 5
     roster: str = "~/.config/t3-pool.json"
-    upkeep_status_url: str = ""
+    upkeep_room_command: tuple = ()
     servers: tuple = ()
     thresholds: Thresholds = field(default_factory=Thresholds)
     fixture: str = ""
@@ -54,10 +54,16 @@ def load(path=None):
 
 
 def parse(raw):
+    if "upkeep_status_url" in raw:
+        raise ValueError("replace upkeep_status_url with upkeep_room_command = [\"upkeep\", \"room\", \"--json\"]")
+    command = raw.get("upkeep_room_command", [])
+    if not isinstance(command, list) or any(not isinstance(part, str) or not part for part in command):
+        raise ValueError("upkeep_room_command must be an array of nonempty arguments")
     servers = tuple(Server(id=s["id"], url=s["url"], token_env=s["token_env"], token_pass=s.get("token_pass", ""))
                     for s in raw.get("servers", []))
     thresholds = Thresholds(**raw.get("thresholds", {}))
     base = "/" + raw.get("base_path", "/fleet").strip("/")
-    keys = {"bind", "port", "interval_seconds", "roster", "upkeep_status_url", "fixture"}
+    keys = {"bind", "port", "interval_seconds", "roster", "fixture"}
     plain = {key: raw[key] for key in keys if key in raw}
-    return Config(base_path="" if base == "/" else base, servers=servers, thresholds=thresholds, **plain)
+    return Config(base_path="" if base == "/" else base, servers=servers, thresholds=thresholds,
+                  upkeep_room_command=tuple(command), **plain)

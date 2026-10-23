@@ -46,12 +46,16 @@ def project(raw, context):
             if evaluated:
                 age += max(0, (context.now - evaluated).total_seconds())
         stale_after = number(account.get("stale_after_s"))
-        stale = age is not None and stale_after is not None and age > stale_after
-        state = "stale" if stale else account.get("state") or "unknown"
+        stale = age is None or age < 0 or stale_after is None or age > stale_after
+        state = account.get("state") or "unknown"
+        if stale and state != "unknown":
+            state = "stale"
         # Room and reset fall back per field to the account's own values when the weekly allowance lacks them.
         room = number(window.get("room_percent"))
         if room is None:
             room = number(account.get("room_percent"))
+        if state in {"unknown", "stale"} or room is not None and not 0 <= room <= 100:
+            room = None
         reset = moment(window.get("resets_at")) or moment(account.get("resets_at"))
         measured = window.get("pace") or {}
         burn = number(measured.get("burn_pp_per_hour"))
@@ -72,11 +76,12 @@ def project(raw, context):
         if burn is not None and sustainable is not None and burn > sustainable and measured.get("outlasts_reset") is not True:
             runs_out = moment(measured.get("runs_out_at"))
         identifier = account.get("instance_id") or account.get("name")
+        aliases = {identifier, *account.get('instances', {}).values()}
         result.append({
             "id": identifier, "name": account.get("name"), "provider": account.get("provider"),
             "state": state, "roomPercent": room, "resetsAt": iso(reset), "pace": pace,
             "burnPerHour": burn, "sustainablePerHour": sustainable, "runsOutAt": iso(runs_out),
-            "running": sum(thread.get("account") == identifier and thread.get("status") in
+            "running": sum(thread.get("account") in aliases and thread.get("status") in
                            ACTIVE for thread in context.threads),
         })
     return result

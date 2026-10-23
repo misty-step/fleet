@@ -4,8 +4,8 @@ One live page for a fleet of T3 Code agents: what needs attention, every lane's
 state and last real side effect, review loops on pull requests, threads to tidy,
 and how much room each AI account has left against its reset.
 
-It reads each T3 server through that server's own MCP API, reads account room
-from [Upkeep](https://github.com/misty-step/upkeep)'s published status, and
+It reads each T3 server through that server's own MCP API, reads canonical account room
+from [Upkeep](https://github.com/misty-step/upkeep)'s `room --json` command, and
 streams a fresh snapshot to the page every few seconds.
 
 ```

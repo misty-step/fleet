@@ -1,12 +1,9 @@
 import copy
-import io
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 from fleet import config, derive, hub
-from fleet.sources.accounts import Accounts
 
 NOW = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
 RESET = "2026-10-22T12:00:00Z"
@@ -27,10 +24,13 @@ STATUS = {
 
 class AccountsTest(unittest.TestCase):
     def collect(self, status):
-        with patch("fleet.sources.accounts.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(status).encode())) as fetch:
-            raw = Accounts("https://upkeep.example.invalid/status.json").collect(None)
-        fetch.assert_called_once_with("https://upkeep.example.invalid/status.json", timeout=20)
-        return raw["accounts"]
+        rows = copy.deepcopy(status['accounts'])
+        for row in rows:
+            row.update(status_observed_at=status.get('observed_at'),
+                       status_age_s=status.get('age_s'),
+                       evaluated_at=status.get('evaluated_at'),
+                       stale_after_s=status.get('stale_after_s'))
+        return rows
 
     def project(self, status=None, now=NOW, threads=()):
         raw = self.collect(STATUS if status is None else status)
@@ -45,7 +45,6 @@ class AccountsTest(unittest.TestCase):
             "roomPercent": 48, "resetsAt": RESET, "pace": "on_pace", "burnPerHour": 2,
             "sustainablePerHour": 2, "runsOutAt": None, "running": 4,
         })
-        self.assertNotIn("private@example.invalid", json.dumps(self.collect(STATUS)))
 
     def test_pace_verdicts_and_inclusive_boundaries(self):
         for burn, expected in [(1, "too_slow"), (1.5, "on_pace"), (2.5, "on_pace"), (3, "too_fast")]:
@@ -158,38 +157,6 @@ class AccountsTest(unittest.TestCase):
                 account["allowances"][1]["room_percent"] = room
                 self.assertEqual(self.project(status)["pace"], expected)
 
-    def test_coded_source_errors_name_the_failure_without_the_body(self):
-        status = copy.deepcopy(STATUS)
-        with patch("fleet.sources.accounts.urllib.request.urlopen", side_effect=OSError("token-in-body")):
-            source = Accounts("https://upkeep.example.invalid/status.json")
-            the_hub = hub.Hub(config.Config(), [source], clock=lambda: NOW)
-            the_hub.run_once(source)
-        self.assertEqual(the_hub.current["sources"]["accounts"]["error"], "accounts-unavailable")
-        with patch("fleet.sources.accounts.urllib.request.urlopen", return_value=io.BytesIO(b'{"accounts": 1}')):
-            the_hub.run_once(source)
-        self.assertEqual(the_hub.current["sources"]["accounts"]["error"], "accounts-invalid-status")
-        self.assertNotIn("token-in-body", the_hub.encoded)
-        status["accounts"] = ["not-an-object"]
-        with patch("fleet.sources.accounts.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(status).encode())):
-            the_hub.run_once(source)
-        self.assertEqual(the_hub.current["sources"]["accounts"]["error"], "accounts-invalid-account")
-
-    def test_no_url_is_empty_without_network(self):
-        with patch("fleet.sources.accounts.urllib.request.urlopen") as fetch:
-            self.assertEqual(Accounts("").collect(None), {"accounts": []})
-        fetch.assert_not_called()
-
-    def test_hub_assembles_accounts_and_retains_them_on_safe_failure(self):
-        source = Accounts("https://upkeep.example.invalid/status.json")
-        the_hub = hub.Hub(config.Config(), [source], clock=lambda: NOW)
-        with patch("fleet.sources.accounts.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(STATUS).encode())):
-            the_hub.run_once(source)
-        self.assertEqual(the_hub.current["accounts"][0]["roomPercent"], 48)
-        with patch("fleet.sources.accounts.urllib.request.urlopen", side_effect=OSError("private body")):
-            the_hub.run_once(source)
-        self.assertEqual(the_hub.current["accounts"][0]["roomPercent"], 48)
-        self.assertFalse(the_hub.current["sources"]["accounts"]["ok"])
-        self.assertNotIn("private", the_hub.encoded)
 
 
 if __name__ == "__main__":

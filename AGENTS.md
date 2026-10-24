@@ -35,5 +35,3 @@ python3 -m fleet serve --fixture fixtures/snapshot.json --port 8797   # page at 
 ```
 
 Verify user-facing changes with [verify-fleet](.agents/skills/verify-fleet/SKILL.md).
-
-Run `sitrep where <task-kind>` before dispatching.

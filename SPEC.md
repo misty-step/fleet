@@ -84,7 +84,7 @@ harness roster (wipRoots) ─┘                         SSE + JSON ◄───
 ```
 
 - **Python 3.12 standard library only.** No dependencies, so it runs on any
-  host with Python, including exe.dev VMs and macOS.
+  host with Python, including Linux hosts and macOS.
 - **Reads go through T3's own MCP** (`t3_project_list`, `t3_thread_list`,
   `t3_thread_read`, `t3_pending_request_list`). Never the state database.
 - **Writes go through T3's own MCP** (`t3_thread_update` to settle,
